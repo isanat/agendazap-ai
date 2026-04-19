@@ -115,7 +115,7 @@ export async function POST(request: NextRequest) {
     }
     
     // Validate integration type
-    const validTypes = ['whatsapp', 'mercadopago', 'google_calendar', 'nfe'];
+    const validTypes = ['whatsapp', 'mercadopago', 'nfe'];
     if (!validTypes.includes(type)) {
       return NextResponse.json(
         { error: 'Invalid integration type' },

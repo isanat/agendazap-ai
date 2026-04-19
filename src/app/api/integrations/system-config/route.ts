@@ -20,7 +20,6 @@ export async function GET(request: NextRequest) {
       evolutionApiUrl: hasEnvEvolutionConfig ? envEvolutionApiUrl : config?.evolutionApiUrl || null,
       evolutionApiAvailable,
       enableAiAssistant: config?.enableAiAssistant ?? true,
-      enableGoogleCalendar: config?.enableGoogleCalendar ?? true,
       enableMercadoPago: config?.enableMercadoPago ?? true,
     };
 
@@ -33,7 +32,6 @@ export async function GET(request: NextRequest) {
         evolutionApiUrl: null,
         evolutionApiAvailable: false,
         enableAiAssistant: true,
-        enableGoogleCalendar: true,
         enableMercadoPago: true,
       }
     });

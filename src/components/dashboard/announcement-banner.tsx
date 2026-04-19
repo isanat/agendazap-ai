@@ -281,7 +281,7 @@ export function QuickStatusBanner() {
             <Calendar className="w-4 h-4 text-orange-600" />
           </div>
           <div className="flex-1">
-            <p className="text-sm font-medium">Google Calendar</p>
+            <p className="text-sm font-medium">Agenda Interna</p>
             <p className="text-xs text-muted-foreground">Sincronização em dia</p>
           </div>
           <Badge variant="outline" className="bg-orange-500/10 text-orange-600 border-orange-200">

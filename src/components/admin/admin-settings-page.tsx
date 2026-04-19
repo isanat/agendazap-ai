@@ -5,7 +5,7 @@ import { motion } from 'framer-motion';
 import { 
   Settings, Server, Key, Globe, Mail, Percent, 
   Save, Check, AlertTriangle, ExternalLink, 
-  Smartphone, Calendar, CreditCard, FileText,
+  Smartphone, CreditCard, FileText,
   MessageSquare, Shield, HelpCircle, Copy, Package
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -38,7 +38,6 @@ interface SystemConfig {
   supportEmail: string | null;
   supportPhone: string | null;
   enableAiAssistant: boolean;
-  enableGoogleCalendar: boolean;
   enableMercadoPago: boolean;
   enableNfeGeneration: boolean;
 }
@@ -444,24 +443,6 @@ export function AdminSettingsPage() {
                 </div>
                 <Switch
                   checked={config?.enableAiAssistant ?? true}
-                  onCheckedChange={(checked) => {
-                    // Update feature flag
-                  }}
-                />
-              </div>
-
-              <div className="flex items-center justify-between p-4 bg-muted/50 rounded-lg">
-                <div className="flex items-center gap-3">
-                  <Calendar className="h-5 w-5 text-blue-500" />
-                  <div>
-                    <p className="font-medium">Google Calendar</p>
-                    <p className="text-sm text-muted-foreground">
-                      Sincronização com Google Agenda
-                    </p>
-                  </div>
-                </div>
-                <Switch
-                  checked={config?.enableGoogleCalendar ?? true}
                   onCheckedChange={(checked) => {
                     // Update feature flag
                   }}

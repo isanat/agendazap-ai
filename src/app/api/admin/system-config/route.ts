@@ -115,7 +115,6 @@ export async function PUT(request: NextRequest) {
       supportEmail,
       supportPhone,
       enableAiAssistant,
-      enableGoogleCalendar,
       enableMercadoPago,
       enableNfeGeneration,
     } = body;
@@ -162,7 +161,6 @@ export async function PUT(request: NextRequest) {
     
     // Feature flags
     if (enableAiAssistant !== undefined) updateData.enableAiAssistant = enableAiAssistant;
-    if (enableGoogleCalendar !== undefined) updateData.enableGoogleCalendar = enableGoogleCalendar;
     if (enableMercadoPago !== undefined) updateData.enableMercadoPago = enableMercadoPago;
     if (enableNfeGeneration !== undefined) updateData.enableNfeGeneration = enableNfeGeneration;
 

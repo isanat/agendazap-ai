@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
-  Smartphone, Calendar, CreditCard, Check, AlertTriangle, 
+  Smartphone, CreditCard, Check, AlertTriangle, 
   RefreshCw, ExternalLink, QrCode, Loader2, Trash2, 
   Power, MessageSquare, HelpCircle, X, Copy, CheckCircle
 } from 'lucide-react';
@@ -37,7 +37,6 @@ interface SystemConfig {
   evolutionApiUrl: string | null;
   evolutionApiAvailable: boolean;
   enableAiAssistant: boolean;
-  enableGoogleCalendar: boolean;
   enableMercadoPago: boolean;
 }
 
@@ -247,48 +246,6 @@ export function IntegrationsSettings() {
     }
   };
 
-  // ========== GOOGLE CALENDAR ==========
-
-  const connectGoogleCalendar = async () => {
-    try {
-      const response = await authFetch('/api/integrations/google/oauth');
-      const data = await response.json();
-
-      if (data.authUrl) {
-        window.location.href = data.authUrl;
-      }
-    } catch {
-      toast({
-        title: 'Erro',
-        description: 'Não foi possível iniciar a conexão',
-        variant: 'destructive',
-      });
-    }
-  };
-
-  const disconnectGoogleCalendar = async () => {
-    try {
-      const gcIntegration = getIntegration('google_calendar');
-      if (!gcIntegration) return;
-
-      await authFetch(`/api/integrations/${gcIntegration.id}`, {
-        method: 'DELETE',
-      });
-
-      toast({
-        title: 'Desconectado',
-        description: 'Google Calendar foi desconectado',
-      });
-      loadData();
-    } catch {
-      toast({
-        title: 'Erro',
-        description: 'Não foi possível desconectar',
-        variant: 'destructive',
-      });
-    }
-  };
-
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -299,8 +256,6 @@ export function IntegrationsSettings() {
 
   const whatsappIntegration = getIntegration('whatsapp');
   const mercadopagoIntegration = getIntegration('mercadopago');
-  const googleIntegration = getIntegration('google_calendar');
-
   return (
     <motion.div
       initial={{ opacity: 0 }}
@@ -534,66 +489,6 @@ export function IntegrationsSettings() {
               <Button onClick={connectMercadoPago}>
                 <ExternalLink className="h-4 w-4 mr-2" />
                 Conectar Mercado Pago
-              </Button>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* Google Calendar Card */}
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="p-2 bg-red-100 dark:bg-red-900/30 rounded-lg">
-                <Calendar className="h-6 w-6 text-red-600" />
-              </div>
-              <div>
-                <CardTitle>Google Calendar</CardTitle>
-                <CardDescription>
-                  Sincronize seus agendamentos com o Google Agenda
-                </CardDescription>
-              </div>
-            </div>
-            {googleIntegration && getStatusBadge(googleIntegration.status)}
-          </div>
-        </CardHeader>
-        <CardContent>
-          {!systemConfig?.enableGoogleCalendar ? (
-            <div className="p-4 bg-muted rounded-lg">
-              <p className="text-sm text-muted-foreground">
-                Esta funcionalidade está desabilitada pelo administrador.
-              </p>
-            </div>
-          ) : googleIntegration?.status === 'connected' ? (
-            <div className="p-4 bg-green-50 dark:bg-green-950/20 rounded-lg border border-green-200 dark:border-green-800">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Check className="h-5 w-5 text-green-600" />
-                  <div>
-                    <p className="font-medium text-green-800 dark:text-green-200">
-                      Google Calendar Conectado
-                    </p>
-                    <p className="text-sm text-green-700 dark:text-green-300">
-                      Seus agendamentos são sincronizados automaticamente
-                    </p>
-                  </div>
-                </div>
-                <Button variant="outline" size="sm" onClick={disconnectGoogleCalendar}>
-                  <Trash2 className="h-4 w-4 mr-2" />
-                  Desconectar
-                </Button>
-              </div>
-            </div>
-          ) : (
-            <div className="flex flex-col items-center justify-center py-6 space-y-4">
-              <p className="text-sm text-muted-foreground text-center max-w-md">
-                Conecte sua conta Google para sincronizar agendamentos automaticamente
-                com seu Google Calendar.
-              </p>
-              <Button onClick={connectGoogleCalendar}>
-                <ExternalLink className="h-4 w-4 mr-2" />
-                Conectar Google Calendar
               </Button>
             </div>
           )}

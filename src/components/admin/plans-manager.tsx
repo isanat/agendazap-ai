@@ -38,7 +38,6 @@ interface Plan {
   maxClients: number;
   includeWhatsApp: boolean;
   includeAiAssistant: boolean;
-  includeGoogleCalendar: boolean;
   includeMercadoPago: boolean;
   includeNfsE: boolean;
   includeReports: boolean;
@@ -62,7 +61,6 @@ const defaultPlanData: Partial<Plan> = {
   maxClients: 500,
   includeWhatsApp: true,
   includeAiAssistant: false,
-  includeGoogleCalendar: false,
   includeMercadoPago: true,
   includeNfsE: false,
   includeReports: true,
@@ -88,7 +86,6 @@ const demoPlans: Plan[] = [
     maxClients: 500,
     includeWhatsApp: true,
     includeAiAssistant: false,
-    includeGoogleCalendar: false,
     includeMercadoPago: true,
     includeNfsE: false,
     includeReports: true,
@@ -111,7 +108,6 @@ const demoPlans: Plan[] = [
     maxClients: 1500,
     includeWhatsApp: true,
     includeAiAssistant: true,
-    includeGoogleCalendar: true,
     includeMercadoPago: true,
     includeNfsE: false,
     includeReports: true,
@@ -134,7 +130,6 @@ const demoPlans: Plan[] = [
     maxClients: 5000,
     includeWhatsApp: true,
     includeAiAssistant: true,
-    includeGoogleCalendar: true,
     includeMercadoPago: true,
     includeNfsE: true,
     includeReports: true,
@@ -157,7 +152,6 @@ const demoPlans: Plan[] = [
     maxClients: 50000,
     includeWhatsApp: true,
     includeAiAssistant: true,
-    includeGoogleCalendar: true,
     includeMercadoPago: true,
     includeNfsE: true,
     includeReports: true,
@@ -423,11 +417,6 @@ export function PlansManager() {
                         <Bot className="h-3 w-3 mr-1" /> IA
                       </Badge>
                     )}
-                    {plan.includeGoogleCalendar && (
-                      <Badge variant="secondary" className="text-xs">
-                        <Calendar className="h-3 w-3 mr-1" /> Google
-                      </Badge>
-                    )}
                     {plan.includeMercadoPago && (
                       <Badge variant="secondary" className="text-xs">
                         <CreditCard className="h-3 w-3 mr-1" /> PIX
@@ -606,17 +595,6 @@ export function PlansManager() {
                   <Switch
                     checked={formData.includeAiAssistant ?? false}
                     onCheckedChange={(checked) => setFormData({ ...formData, includeAiAssistant: checked })}
-                  />
-                </div>
-                
-                <div className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
-                  <div className="flex items-center gap-2">
-                    <Calendar className="h-4 w-4 text-blue-500" />
-                    <span className="text-sm">Google Calendar</span>
-                  </div>
-                  <Switch
-                    checked={formData.includeGoogleCalendar ?? false}
-                    onCheckedChange={(checked) => setFormData({ ...formData, includeGoogleCalendar: checked })}
                   />
                 </div>
                 

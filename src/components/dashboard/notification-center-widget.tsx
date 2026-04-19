@@ -123,7 +123,7 @@ function generateMockNotifications(): SystemNotification[] {
       id: '4',
       type: 'error',
       title: 'Falha na Integração',
-      message: 'Não foi possível sincronizar com o Google Calendar. Verifique as configurações.',
+      message: 'Não foi possível sincronizar seus agendamentos. Verifique as configurações.',
       timestamp: new Date(now.getTime() - 5 * 60 * 60 * 1000),
       read: false,
       actionUrl: '/settings/integrations',

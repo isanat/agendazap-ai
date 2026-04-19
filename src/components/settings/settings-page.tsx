@@ -698,7 +698,7 @@ export function SettingsPage() {
                   </div>
                   <div>
                     <p className="font-medium text-foreground">Configure integrações na aba "Integrações"</p>
-                    <p className="text-sm">Conecte Mercado Pago, WhatsApp e Google Agenda</p>
+                    <p className="text-sm">Conecte Mercado Pago e WhatsApp</p>
                   </div>
                 </motion.div>
               </CardContent>

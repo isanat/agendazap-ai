@@ -411,7 +411,6 @@ model SubscriptionPlan {
   maxClients             Int                   @default(500)
   includeWhatsApp        Boolean               @default(true)
   includeAiAssistant     Boolean               @default(false)
-  includeGoogleCalendar  Boolean               @default(false)
   includeMercadoPago     Boolean               @default(true)
   includeNfsE            Boolean               @default(false)
   includeReports         Boolean               @default(true)
@@ -444,7 +443,6 @@ model SystemConfiguration {
   supportEmail         String?
   supportPhone         String?
   enableAiAssistant    Boolean  @default(true)
-  enableGoogleCalendar Boolean  @default(true)
   enableMercadoPago    Boolean  @default(true)
   enableNfeGeneration  Boolean  @default(false)
   createdAt            DateTime @default(now())
