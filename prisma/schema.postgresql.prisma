@@ -1,0 +1,540 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model Account {
+  id                     String               @id @default(cuid())
+  businessName           String
+  businessType           String               @default("salon")
+  whatsappNumber         String               @unique
+  whatsappConnected      Boolean              @default(false)
+  whatsappSession        String?
+  instagram              String?
+  facebook               String?
+  website                String?
+  description            String?
+  address                String?
+  addressCity            String?
+  addressState           String?
+  addressZipCode         String?
+  addressComplement      String?
+  googleMapsUrl          String?
+  googleMapsEmbed        String?
+  openingTime            String               @default("09:00")
+  closingTime            String               @default("18:00")
+  workingDays            String               @default("1,2,3,4,5")
+  noShowFeeEnabled       Boolean              @default(true)
+  noShowFeeAmount        Float                @default(50.0)
+  noShowFeeDeadline      Int                  @default(24)
+  reminder24h            Boolean              @default(true)
+  reminder2h             Boolean              @default(true)
+  welcomeMessage         String?
+  confirmationMessage    String?
+  reminderMessage        String?
+  noShowMessage          String?
+  plan                   String               @default("basic")
+  planExpiresAt          DateTime?
+  trialEndsAt            DateTime?
+  mercadoPagoAccessToken String?
+  mercadoPagoPublicKey   String?
+  ownerId                String               @unique
+  createdAt              DateTime             @default(now())
+  updatedAt              DateTime             @updatedAt
+  User                   User                 @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  AccountSubscription    AccountSubscription?
+  Appointment            Appointment[]
+  Client                 Client[]
+  ClientPackage          ClientPackage[]
+  Holiday                Holiday[]
+  Integration            Integration[]
+  LoyaltyProgram         LoyaltyProgram?
+  LoyaltyTransaction     LoyaltyTransaction[]
+  Package                Package[]
+  Professional           Professional[]
+  Report                 Report[]
+  Service                Service[]
+  WhatsappMessage        WhatsappMessage[]
+}
+
+model AccountSubscription {
+  id                        String           @id @default(cuid())
+  accountId                 String           @unique
+  planId                    String
+  status                    String           @default("active")
+  billingCycle              String           @default("monthly")
+  currentPeriodStart        DateTime
+  currentPeriodEnd          DateTime
+  canceledAt                DateTime?
+  mercadoPagoSubscriptionId String?
+  createdAt                 DateTime         @default(now())
+  updatedAt                 DateTime         @updatedAt
+  Account                   Account          @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  SubscriptionPlan          SubscriptionPlan @relation(fields: [planId], references: [id])
+
+  @@index([accountId])
+  @@index([status])
+}
+
+model Appointment {
+  id                 String       @id @default(cuid())
+  accountId          String
+  clientId           String
+  serviceId          String
+  professionalId     String
+  datetime           DateTime
+  endTime            DateTime
+  status             String       @default("pending")
+  cancellationReason String?
+  cancelledAt        DateTime?
+  cancelledBy        String?
+  confirmedAt        DateTime?
+  reminder24hSent    Boolean      @default(false)
+  reminder2hSent     Boolean      @default(false)
+  pixPaid            Boolean      @default(false)
+  pixQrCode          String?
+  pixDeepLink        String?
+  pixExpiresAt       DateTime?
+  notes              String?
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+  Account            Account      @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  Client             Client       @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  Professional       Professional @relation(fields: [professionalId], references: [id], onDelete: Cascade)
+  Service            Service      @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  AuditLog           AuditLog[]
+  NoShowFee          NoShowFee?
+
+  @@index([accountId, datetime])
+  @@index([accountId, status])
+  @@index([professionalId, datetime])
+}
+
+model AuditLog {
+  id            String       @id @default(cuid())
+  appointmentId String?
+  userId        String?
+  action        String
+  details       String
+  createdAt     DateTime     @default(now())
+  Appointment   Appointment? @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  User          User?        @relation(fields: [userId], references: [id])
+}
+
+model BlockedSlot {
+  id             String   @id @default(cuid())
+  professionalId String
+  startDateTime  DateTime
+  endDateTime    DateTime
+  reason         String?
+  createdAt      DateTime @default(now())
+
+  @@index([professionalId, startDateTime])
+}
+
+model Client {
+  id                 String               @id @default(cuid())
+  accountId          String
+  name               String
+  phone              String
+  email              String?
+  totalAppointments  Int                  @default(0)
+  noShowCount        Int                  @default(0)
+  lastVisit          DateTime?
+  noShowScore        Int                  @default(50)
+  notes              String?
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+  loyaltyPoints      Int                  @default(0)
+  Appointment        Appointment[]
+  Account            Account              @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  ClientPackage      ClientPackage[]
+  LoyaltyTransaction LoyaltyTransaction[]
+  User               User?
+
+  @@unique([accountId, phone])
+  @@index([accountId])
+}
+
+model ClientPackage {
+  id            String         @id @default(cuid())
+  accountId     String
+  clientId      String
+  packageId     String
+  purchaseDate  DateTime       @default(now())
+  expiryDate    DateTime
+  totalSessions Int
+  usedSessions  Int            @default(0)
+  status        String         @default("active")
+  paid          Boolean        @default(false)
+  paymentMethod String?
+  price         Float
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  Account       Account        @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  Client        Client         @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  Package       Package        @relation(fields: [packageId], references: [id], onDelete: Cascade)
+  PackageUsage  PackageUsage[]
+
+  @@index([accountId, clientId])
+  @@index([accountId, status])
+}
+
+model Holiday {
+  id             String   @id @default(cuid())
+  accountId      String
+  date           DateTime
+  description    String?
+  isRecurring    Boolean  @default(false)
+  professionalId String?
+  createdAt      DateTime @default(now())
+  Account        Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([accountId, date])
+}
+
+model Integration {
+  id           String    @id @default(cuid())
+  accountId    String
+  type         String
+  status       String    @default("pending")
+  lastSync     DateTime?
+  errorMessage String?
+  credentials  String
+  config       String?
+  metadata     String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  Account      Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@unique([accountId, type])
+  @@index([accountId])
+}
+
+model LoyaltyProgram {
+  id                   String   @id @default(cuid())
+  accountId            String   @unique
+  name                 String   @default("Programa de Fidelidade")
+  pointsPerReal        Float    @default(1)
+  redemptionRate       Float    @default(100)
+  minimumPoints        Int      @default(100)
+  maxDiscountPercent   Float    @default(20)
+  pointsExpirationDays Int      @default(365)
+  welcomeBonus         Int      @default(0)
+  referralBonus        Int      @default(0)
+  isActive             Boolean  @default(true)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  Account              Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([accountId])
+}
+
+model LoyaltyTransaction {
+  id            String    @id @default(cuid())
+  accountId     String
+  clientId      String
+  points        Int
+  type          String
+  description   String?
+  appointmentId String?
+  expiryDate    DateTime?
+  createdAt     DateTime  @default(now())
+  Account       Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  Client        Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@index([accountId, clientId])
+  @@index([accountId, createdAt])
+  @@index([expiryDate])
+}
+
+model NoShowFee {
+  id            String      @id @default(cuid())
+  appointmentId String      @unique
+  amount        Float
+  pixQrCode     String?
+  pixDeepLink   String?
+  pixId         String?
+  paid          Boolean     @default(false)
+  paidAt        DateTime?
+  reminderSent  Boolean     @default(false)
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  Appointment   Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+}
+
+model OAuthState {
+  id           String   @id @default(cuid())
+  accountId    String
+  provider     String
+  state        String   @unique
+  codeVerifier String?
+  redirectUri  String
+  createdAt    DateTime @default(now())
+  expiresAt    DateTime
+
+  @@index([accountId, provider])
+}
+
+model Package {
+  id              String           @id @default(cuid())
+  accountId       String
+  name            String
+  description     String?
+  price           Float
+  originalPrice   Float
+  discountPercent Float            @default(0)
+  totalSessions   Int              @default(1)
+  validityDays    Int              @default(30)
+  isActive        Boolean          @default(true)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  ClientPackage   ClientPackage[]
+  Account         Account          @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  PackageService  PackageService[]
+
+  @@index([accountId])
+  @@index([accountId, isActive])
+}
+
+model PackageService {
+  id        String  @id @default(cuid())
+  packageId String
+  serviceId String
+  quantity  Int     @default(1)
+  Package   Package @relation(fields: [packageId], references: [id], onDelete: Cascade)
+  Service   Service @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  @@unique([packageId, serviceId])
+}
+
+model PackageUsage {
+  id              String        @id @default(cuid())
+  clientPackageId String
+  appointmentId   String?
+  usedAt          DateTime      @default(now())
+  notes           String?
+  ClientPackage   ClientPackage @relation(fields: [clientPackageId], references: [id], onDelete: Cascade)
+
+  @@index([clientPackageId])
+}
+
+model Professional {
+  id                  String                @id @default(cuid())
+  accountId           String
+  userId              String?
+  name                String
+  phone               String?
+  email               String?
+  avatar              String?
+  color               String                @default("#10B981")
+  workingDays         String?
+  openingTime         String?
+  closingTime         String?
+  isActive            Boolean               @default(true)
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime              @updatedAt
+  Appointment         Appointment[]
+  Account             Account               @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  User                User?                 @relation(fields: [userId], references: [id])
+  ServiceProfessional ServiceProfessional[]
+
+  @@index([accountId])
+}
+
+model Report {
+  id                    String   @id @default(cuid())
+  accountId             String
+  type                  String
+  startDate             DateTime
+  endDate               DateTime
+  totalAppointments     Int
+  completedAppointments Int
+  noShowCount           Int
+  cancelledCount        Int
+  totalRevenue          Float
+  lostRevenue           Float
+  noShowRate            Float
+  occupancyRate         Float
+  data                  String
+  createdAt             DateTime @default(now())
+  Account               Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([accountId, startDate])
+}
+
+model Service {
+  id                  String                @id @default(cuid())
+  accountId           String
+  name                String
+  description         String?
+  durationMinutes     Int
+  price               Float
+  isActive            Boolean               @default(true)
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime              @updatedAt
+  category            String                @default("outros")
+  Appointment         Appointment[]
+  PackageService      PackageService[]
+  Account             Account               @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  ServiceProfessional ServiceProfessional[]
+
+  @@index([accountId])
+}
+
+model ServiceProfessional {
+  id             String       @id @default(cuid())
+  serviceId      String
+  professionalId String
+  customPrice    Float?
+  Professional   Professional @relation(fields: [professionalId], references: [id], onDelete: Cascade)
+  Service        Service      @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  @@unique([serviceId, professionalId])
+}
+
+model SubscriptionPlan {
+  id                     String                @id @default(cuid())
+  name                   String                @unique
+  displayName            String
+  description            String?
+  priceMonthly           Float                 @default(0)
+  priceYearly            Float                 @default(0)
+  maxProfessionals       Int                   @default(1)
+  maxServices            Int                   @default(10)
+  maxAppointmentsMonth   Int                   @default(100)
+  maxClients             Int                   @default(500)
+  includeWhatsApp        Boolean               @default(true)
+  includeAiAssistant     Boolean               @default(false)
+  includeGoogleCalendar  Boolean               @default(false)
+  includeMercadoPago     Boolean               @default(true)
+  includeNfsE            Boolean               @default(false)
+  includeReports         Boolean               @default(true)
+  includeCustomDomain    Boolean               @default(false)
+  includePrioritySupport Boolean               @default(false)
+  maxAiTokensMonth       Int                   @default(0) // Max AI tokens per month (0 = no AI)
+  aiModelType            String                @default("basic") // "basic", "standard", "premium"
+  isActive               Boolean               @default(true)
+  isPopular              Boolean               @default(false)
+  sortOrder              Int                   @default(0)
+  createdAt              DateTime              @default(now())
+  updatedAt              DateTime              @updatedAt
+  AccountSubscription    AccountSubscription[]
+}
+
+model SystemConfiguration {
+  id                   String   @id @default(cuid())
+  evolutionApiUrl      String?
+  evolutionApiKey      String?
+  evolutionWebhookUrl  String?
+  smtpHost             String?
+  smtpPort             Int?
+  smtpUser             String?
+  smtpPassword         String?
+  emailFrom            String?
+  platformFeePercent   Float    @default(0)
+  platformFeeFixed     Float    @default(0)
+  systemName           String   @default("AgendaZap")
+  systemLogo           String?
+  supportEmail         String?
+  supportPhone         String?
+  enableAiAssistant    Boolean  @default(true)
+  enableGoogleCalendar Boolean  @default(true)
+  enableMercadoPago    Boolean  @default(true)
+  enableNfeGeneration  Boolean  @default(false)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  AIProvider           AIProvider[]
+}
+
+/// AI Provider configuration for multi-provider support with fallback
+model AIProvider {
+  id                    String   @id @default(cuid())
+  name                  String   @unique // e.g., "groq", "zai", "openai", "anthropic"
+  displayName           String   // e.g., "Groq (Llama)", "Z.ai", "OpenAI (GPT-4)"
+  apiKey                String   // Encrypted API key
+  baseUrl               String?  // Custom API endpoint (optional)
+  model                 String   @default("default") // Model to use
+  priority              Int      @default(0) // Lower = higher priority (fallback order)
+  isEnabled             Boolean  @default(true)
+  costPerInputToken     Float    @default(0) // Cost per 1K input tokens in USD
+  costPerOutputToken    Float    @default(0) // Cost per 1K output tokens in USD
+  rateLimitPerMinute    Int      @default(60) // Max requests per minute
+  maxTokensPerRequest   Int      @default(4096) // Max tokens per request
+  timeoutMs             Int      @default(30000) // Request timeout in ms
+  healthStatus          String   @default("unknown") // "healthy", "degraded", "down"
+  lastHealthCheck       DateTime?
+  totalRequests         Int      @default(0)
+  totalTokensUsed       BigInt   @default(0)
+  totalErrors           Int      @default(0)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  systemConfigurationId String?
+  SystemConfiguration   SystemConfiguration? @relation(fields: [systemConfigurationId], references: [id])
+  AITokenUsage          AITokenUsage[]
+
+  @@index([priority])
+  @@index([isEnabled])
+}
+
+/// Token usage tracking per account for billing and limits
+model AITokenUsage {
+  id            String    @id @default(cuid())
+  accountId     String
+  providerId    String
+  inputTokens   Int       @default(0)
+  outputTokens  Int       @default(0)
+  totalTokens   Int       @default(0)
+  costUsd       Float     @default(0)
+  requestType   String    @default("chat") // "chat", "embedding", etc.
+  metadata      String?   // JSON with additional info
+  createdAt     DateTime  @default(now())
+  periodStart   DateTime  // Start of billing period
+  periodEnd     DateTime  // End of billing period
+  provider      AIProvider @relation(fields: [providerId], references: [id])
+
+  @@index([accountId, periodStart])
+  @@index([accountId, createdAt])
+  @@index([providerId])
+}
+
+model User {
+  id           String         @id @default(cuid())
+  email        String         @unique
+  password     String
+  name         String
+  phone        String?
+  avatar       String?
+  role         String         @default("owner")
+  isActive     Boolean        @default(true)
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+  clientId     String?        @unique
+  Account      Account?
+  AuditLog     AuditLog[]
+  Professional Professional[]
+  Client       Client?        @relation(fields: [clientId], references: [id])
+}
+
+model WhatsappMessage {
+  id            String   @id @default(cuid())
+  accountId     String
+  clientPhone   String
+  direction     String
+  message       String
+  messageType   String   @default("text")
+  appointmentId String?
+  intent        String?
+  status        String   @default("sent")
+  createdAt     DateTime @default(now())
+  metadata      Json?
+  Account       Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([accountId, clientPhone])
+  @@index([accountId, createdAt])
+}
