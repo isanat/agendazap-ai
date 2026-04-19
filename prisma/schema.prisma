@@ -296,7 +296,7 @@ model Package {
   updatedAt       DateTime         @updatedAt
   ClientPackage   ClientPackage[]
   Account         Account          @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  PackageService  PackageService[]
+  packageServices  PackageService[]
 
   @@index([accountId])
   @@index([accountId, isActive])
