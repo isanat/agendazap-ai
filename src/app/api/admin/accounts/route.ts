@@ -33,8 +33,8 @@ export async function GET(request: NextRequest) {
       where.OR = [
         { businessName: { contains: search, mode: 'insensitive' } },
         { whatsappNumber: { contains: search, mode: 'insensitive' } },
-        { owner: { email: { contains: search, mode: 'insensitive' } } },
-        { owner: { name: { contains: search, mode: 'insensitive' } } },
+        { User: { email: { contains: search, mode: 'insensitive' } } },
+        { User: { name: { contains: search, mode: 'insensitive' } } },
       ]
     }
 
