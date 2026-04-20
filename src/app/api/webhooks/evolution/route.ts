@@ -555,28 +555,56 @@ async function processIncomingMessage(
           // Try database: find client by push name or client name
           const pushName = data.pushName;
           if (pushName) {
-            // Find all clients for this account and filter in code
-            const allClients = await db.client.findMany({
-              where: { accountId: lidAccountId },
+            // Strategy 1: Find client by exact whatsapp push name
+            const clientsByPushName = await db.client.findMany({
+              where: { accountId: lidAccountId, whatsappPushName: pushName },
               select: { id: true, name: true, phone: true, whatsappPushName: true }
             });
+            let clientByName = clientsByPushName.find(c => !c.phone.startsWith('lid:'));
             
-            // Find a client with a non-LID phone that matches by name or push name
-            const matchingClient = allClients.find(c => 
-              !c.phone.startsWith('lid:') && 
-              (c.whatsappPushName === pushName || 
-               (c.name && c.name.includes(pushName)))
-            );
+            // Strategy 2: Find client by name containing the push name
+            if (!clientByName) {
+              const clientsByClientName = await db.client.findMany({
+                where: { accountId: lidAccountId, name: { contains: pushName } },
+                select: { id: true, name: true, phone: true, whatsappPushName: true }
+              });
+              clientByName = clientsByClientName.find(c => !c.phone.startsWith('lid:'));
+            }
             
-            if (matchingClient) {
-              phone = matchingClient.phone;
+            // Strategy 3: Find phone from previous successful outgoing messages with this pushName
+            if (!clientByName) {
+              // Look at incoming messages where pushName matches in metadata
+              const recentMessages = await db.whatsappMessage.findMany({
+                where: {
+                  accountId: lidAccountId,
+                  direction: 'incoming',
+                  metadata: { contains: pushName }
+                },
+                orderBy: { createdAt: 'desc' },
+                take: 10,
+                select: { clientPhone: true, metadata: true }
+              });
+              
+              // Find a phone number that's NOT a LID from these messages
+              for (const msg of recentMessages) {
+                if (msg.clientPhone && !msg.clientPhone.startsWith('lid:') && /^\d{8,15}$/.test(msg.clientPhone.replace(/\D/g, ''))) {
+                  // Found a real phone number associated with this pushName
+                  clientByName = { id: '', name: pushName, phone: msg.clientPhone, whatsappPushName: pushName } as any;
+                  console.log(`[Webhook] LID resolved via message history to: ${msg.clientPhone}`);
+                  break;
+                }
+              }
+            }
+            
+            if (clientByName && !clientByName.phone.startsWith('lid:')) {
+              phone = clientByName.phone;
               console.log(`[Webhook] LID resolved via database name match to: ${phone}`);
               
               // Update whatsappPushName for future matching (don't update phone - would violate unique constraint)
-              if (matchingClient.whatsappPushName !== pushName) {
+              if (clientByName.whatsappPushName !== pushName && clientByName.id) {
                 try {
                   await db.client.update({
-                    where: { id: matchingClient.id },
+                    where: { id: clientByName.id },
                     data: { whatsappPushName: pushName }
                   });
                 } catch (updateErr) {
@@ -586,17 +614,19 @@ async function processIncomingMessage(
               
               // Also update the LID client's phone if it exists separately
               // But be careful not to violate unique constraint - delete the LID client instead
-              try {
-                const lidClient = await db.client.findFirst({
-                  where: { accountId: lidAccountId, phone: { contains: lidValue } }
-                });
-                if (lidClient && lidClient.id !== matchingClient.id && lidClient.phone.startsWith('lid:')) {
-                  // Delete the LID client to avoid duplicates (the matching client already exists)
-                  await db.client.delete({ where: { id: lidClient.id } });
-                  console.log(`[Webhook] Deleted duplicate LID client ${lidClient.id}`);
+              if (clientByName.id) {
+                try {
+                  const lidClient = await db.client.findFirst({
+                    where: { accountId: lidAccountId, phone: { contains: lidValue } }
+                  });
+                  if (lidClient && lidClient.id !== clientByName.id && lidClient.phone.startsWith('lid:')) {
+                    // Delete the LID client to avoid duplicates (the matching client already exists)
+                    await db.client.delete({ where: { id: lidClient.id } });
+                    console.log(`[Webhook] Deleted duplicate LID client ${lidClient.id}`);
+                  }
+                } catch (cleanupErr) {
+                  console.log(`[Webhook] Could not cleanup LID client: ${cleanupErr instanceof Error ? cleanupErr.message : cleanupErr}`);
                 }
-              } catch (cleanupErr) {
-                console.log(`[Webhook] Could not cleanup LID client: ${cleanupErr instanceof Error ? cleanupErr.message : cleanupErr}`);
               }
             } else {
               console.warn(`[Webhook] ⚠️ Could not resolve LID. JID: ${data.key?.remoteJid}, pushName: ${pushName}`);
