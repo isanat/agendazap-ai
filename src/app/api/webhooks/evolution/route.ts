@@ -577,7 +577,7 @@ async function processIncomingMessage(
             where: {
               accountId,
               whatsappPushName: pushName,
-              NOT: { phone: { startsWith: 'lid:' } }
+              phone: { not: { startsWith: 'lid:' } }
             }
           });
           
