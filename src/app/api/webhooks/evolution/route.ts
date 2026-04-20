@@ -572,12 +572,31 @@ async function processIncomingMessage(
               phone = matchingClient.phone;
               console.log(`[Webhook] LID resolved via database name match to: ${phone}`);
               
-              // Update whatsappPushName for future matching
+              // Update whatsappPushName for future matching (don't update phone - would violate unique constraint)
               if (matchingClient.whatsappPushName !== pushName) {
-                await db.client.update({
-                  where: { id: matchingClient.id },
-                  data: { whatsappPushName: pushName }
+                try {
+                  await db.client.update({
+                    where: { id: matchingClient.id },
+                    data: { whatsappPushName: pushName }
+                  });
+                } catch (updateErr) {
+                  console.log(`[Webhook] Could not update whatsappPushName: ${updateErr instanceof Error ? updateErr.message : updateErr}`);
+                }
+              }
+              
+              // Also update the LID client's phone if it exists separately
+              // But be careful not to violate unique constraint - delete the LID client instead
+              try {
+                const lidClient = await db.client.findFirst({
+                  where: { accountId: lidAccountId, phone: { contains: lidValue } }
                 });
+                if (lidClient && lidClient.id !== matchingClient.id && lidClient.phone.startsWith('lid:')) {
+                  // Delete the LID client to avoid duplicates (the matching client already exists)
+                  await db.client.delete({ where: { id: lidClient.id } });
+                  console.log(`[Webhook] Deleted duplicate LID client ${lidClient.id}`);
+                }
+              } catch (cleanupErr) {
+                console.log(`[Webhook] Could not cleanup LID client: ${cleanupErr instanceof Error ? cleanupErr.message : cleanupErr}`);
               }
             } else {
               console.warn(`[Webhook] ⚠️ Could not resolve LID. JID: ${data.key?.remoteJid}, pushName: ${pushName}`);
