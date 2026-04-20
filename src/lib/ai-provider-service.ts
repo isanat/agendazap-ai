@@ -354,46 +354,63 @@ export async function trackTokenUsage(
 }
 
 /**
- * Call Zhipu AI (GLM-4) via the Z.ai platform SDK
- * Falls back to direct API calls if SDK is unavailable
+ * Call Zhipu AI (GLM-4) with automatic model fallback
+ * Tries models in order: requested model -> glm-4-plus -> glm-4 -> glm-4-air
+ * Falls back through: Z.ai platform -> ZAI SDK -> Direct Zhipu AI API
  */
 async function callZhipuAI(
   messages: ChatMessage[],
   model: string = 'glm-4-air'
 ): Promise<{ content: string; inputTokens: number; outputTokens: number }> {
+  // Models to try in order if the requested one fails with "model not found"
+  const modelFallbacks = [model, 'glm-4-plus', 'glm-4', 'glm-4-air', 'glm-4-flashx'];
+  
   // Method 1: Try Z.ai platform API (direct HTTP with X-Z-AI-From header)
-  const zaiResult = await callZaiPlatform(messages, model);
-  if (zaiResult) {
-    console.log('[AI] Z.ai platform call succeeded');
-    return zaiResult;
+  for (const tryModel of modelFallbacks) {
+    const zaiResult = await callZaiPlatform(messages, tryModel);
+    if (zaiResult) {
+      console.log(`[AI] Z.ai platform call succeeded with model: ${tryModel}`);
+      return zaiResult;
+    }
   }
   
   // Method 2: Try ZAI SDK (requires .z-ai-config file)
   try {
     const client = await getZaiClient();
     if (client) {
-      console.log('[AI] Calling via ZAI SDK');
-      const result = await client.chat.completions.create({
-        model,
-        messages: messages.map(m => ({
-          role: m.role,
-          content: m.content
-        })),
-        max_tokens: 1024,
-        temperature: 0.7,
-      });
-      
-      return {
-        content: result.choices?.[0]?.message?.content || '',
-        inputTokens: result.usage?.prompt_tokens || 0,
-        outputTokens: result.usage?.completion_tokens || 0
-      };
+      for (const tryModel of modelFallbacks) {
+        try {
+          console.log(`[AI] Calling via ZAI SDK with model: ${tryModel}`);
+          const result = await client.chat.completions.create({
+            model: tryModel,
+            messages: messages.map(m => ({
+              role: m.role,
+              content: m.content
+            })),
+            max_tokens: 1024,
+            temperature: 0.7,
+          });
+          
+          return {
+            content: result.choices?.[0]?.message?.content || '',
+            inputTokens: result.usage?.prompt_tokens || 0,
+            outputTokens: result.usage?.completion_tokens || 0
+          };
+        } catch (sdkModelErr: any) {
+          // If model not found, try next model
+          if (String(sdkModelErr).includes('1211') || String(sdkModelErr).includes('model')) {
+            console.log(`[AI] Model ${tryModel} not available via SDK, trying next...`);
+            continue;
+          }
+          throw sdkModelErr;
+        }
+      }
     }
   } catch (sdkError) {
     console.log('[AI] ZAI SDK call failed, trying direct API:', sdkError);
   }
   
-  // Method 3: Direct Zhipu AI API call (fallback)
+  // Method 3: Direct Zhipu AI API call with model fallback
   console.log('[AI] Calling Zhipu AI (GLM-4) via direct public API');
   
   // Get API key from environment or database
@@ -412,36 +429,58 @@ async function callZhipuAI(
     throw new Error('Zhipu AI API key not configured. Set ZAI_API_KEY or ZHIPU_API_KEY environment variable.');
   }
   
-  const response = await fetch(`${ZHIPU_API_URL}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${apiKey}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      model: model,
-      messages: messages.map(m => ({
-        role: m.role === 'system' ? 'system' : m.role,
-        content: m.content
-      })),
-      max_tokens: 1024,
-      temperature: 0.7
-    }),
-    signal: AbortSignal.timeout(30000)
-  });
-
-  if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`Zhipu AI error: ${response.status} - ${error}`);
-  }
-
-  const data = await response.json();
+  let lastApiError: Error | null = null;
   
-  return {
-    content: data.choices[0]?.message?.content || '',
-    inputTokens: data.usage?.prompt_tokens || 0,
-    outputTokens: data.usage?.completion_tokens || 0
-  };
+  for (const tryModel of modelFallbacks) {
+    try {
+      console.log(`[AI] Trying Zhipu AI model: ${tryModel}`);
+      
+      const response = await fetch(`${ZHIPU_API_URL}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          model: tryModel,
+          messages: messages.map(m => ({
+            role: m.role === 'system' ? 'system' : m.role,
+            content: m.content
+          })),
+          max_tokens: 1024,
+          temperature: 0.7
+        }),
+        signal: AbortSignal.timeout(30000)
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        // If model not found (error 1211), try next model
+        if (errorText.includes('"1211"') || errorText.includes('模型不存在')) {
+          console.log(`[AI] Model ${tryModel} not found, trying next fallback...`);
+          lastApiError = new Error(`Zhipu AI error: ${response.status} - ${errorText}`);
+          continue;
+        }
+        throw new Error(`Zhipu AI error: ${response.status} - ${errorText}`);
+      }
+
+      const data = await response.json();
+      console.log(`[AI] Zhipu AI succeeded with model: ${tryModel}`);
+      
+      return {
+        content: data.choices[0]?.message?.content || '',
+        inputTokens: data.usage?.prompt_tokens || 0,
+        outputTokens: data.usage?.completion_tokens || 0
+      };
+    } catch (err) {
+      lastApiError = err instanceof Error ? err : new Error(String(err));
+      if (!String(lastApiError).includes('1211') && !String(lastApiError).includes('模型不存在')) {
+        throw lastApiError;
+      }
+    }
+  }
+  
+  throw lastApiError || new Error('All Zhipu AI model attempts failed');
 }
 
 /**
