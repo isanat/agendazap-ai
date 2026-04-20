@@ -115,11 +115,16 @@ export async function findOrCreateClient(
 ): Promise<string> {
   const normalizedPhone = phone.replace(/\D/g, '');
   
+  // For LID identifiers, search by exact match since there's no phone number to fuzzy match
+  const isLid = phone.startsWith('lid:');
+  const searchValue = isLid ? phone : normalizedPhone;
+  const searchContains = isLid ? phone : normalizedPhone.slice(-9);
+  
   // Try to find existing client first
   const existingClient = await db.client.findFirst({
     where: {
       accountId,
-      phone: { contains: normalizedPhone.slice(-9) }
+      phone: { contains: searchContains }
     }
   });
 
@@ -131,24 +136,40 @@ export async function findOrCreateClient(
         data: { whatsappPushName: pushName }
       });
     }
+    
+    // If existing client has a LID phone and we now have a real phone number, update it
+    if (existingClient.phone.startsWith('lid:') && !isLid && normalizedPhone) {
+      await db.client.update({
+        where: { id: existingClient.id },
+        data: { phone: normalizedPhone }
+      });
+      console.log(`[AI Context] Client phone updated from LID to real number: ${normalizedPhone}`);
+    }
+    
     return existingClient.id;
   }
 
   // Create new client - wrap in try/catch for race condition
-  const displayName = pushName || `Cliente ${normalizedPhone.slice(-4)}`;
+  // For LID identifiers, use the LID as phone (will be updated when real phone is resolved)
+  const phoneForDb = isLid ? phone : normalizedPhone;
+  const displayName = pushName || (isLid ? `Cliente WhatsApp` : `Cliente ${normalizedPhone.slice(-4)}`);
   
   try {
     const newClient = await db.client.create({
       data: {
         accountId,
         name: displayName,
-        phone: normalizedPhone,
+        phone: phoneForDb,
         whatsappPushName: pushName || null,
-        notes: pushName ? `Nome do perfil WhatsApp: ${pushName}` : 'Cliente novo - aguardando nome',
+        notes: pushName 
+          ? `Nome do perfil WhatsApp: ${pushName}${isLid ? ' (telefone ainda não identificado - LID)' : ''}` 
+          : isLid 
+            ? 'Cliente com LID - telefone será identificado automaticamente' 
+            : 'Cliente novo - aguardando nome',
         lastAiInteraction: new Date(),
       }
     });
-    console.log(`[AI Context] New client created: ${newClient.id} (${displayName}) for account ${accountId}`);
+    console.log(`[AI Context] New client created: ${newClient.id} (${displayName}) for account ${accountId}${isLid ? ' [LID session]' : ''}`);
     return newClient.id;
   } catch (error: any) {
     // Handle race condition: unique constraint violation (P2002)
@@ -157,7 +178,7 @@ export async function findOrCreateClient(
       const concurrentClient = await db.client.findFirst({
         where: {
           accountId,
-          phone: { contains: normalizedPhone.slice(-9) }
+          phone: { contains: searchContains }
         }
       });
       if (concurrentClient) {

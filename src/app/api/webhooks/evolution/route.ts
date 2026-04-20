@@ -160,19 +160,177 @@ async function downloadMedia(
 }
 
 /**
- * Extract phone number from JID
+ * Extract phone number or session identifier from JID
+ * 
+ * Handles multiple JID formats:
+ * - phonenumber@s.whatsapp.net → normal direct message
+ * - identifier@lid → WhatsApp LID (Linked ID) privacy format
+ * - something@g.us → group message (returns null)
+ * - something@broadcast → broadcast (returns null)
+ * 
+ * For @lid JIDs, returns a lid: prefixed identifier that can be used
+ * as a session key. The actual phone number must be resolved separately
+ * via the Evolution API contact resolution.
  */
 function extractPhoneFromJid(jid: string | undefined): string | null {
   if (!jid) return null;
-  if (jid.includes('@g.us') || jid.includes('@broadcast') || jid.includes('@lid')) {
+  
+  // Skip group and broadcast messages
+  if (jid.includes('@g.us') || jid.includes('@broadcast')) {
     return null;
   }
+  
+  // Handle @lid JIDs - WhatsApp's privacy format
+  // These contain an opaque identifier instead of a phone number
+  if (jid.includes('@lid')) {
+    const match = jid.match(/^([^@]+)@lid/);
+    if (match && match[1]) {
+      console.log(`[Webhook] LID format detected: ${jid} - will attempt phone resolution`);
+      return `lid:${match[1]}`;
+    }
+    return null;
+  }
+  
+  // Standard format: phonenumber@s.whatsapp.net
   const match = jid.match(/^(\d+)@/);
   const phone = match ? match[1] : null;
-  if (phone && (phone.length < 10 || phone.length > 15)) {
+  
+  if (phone) {
+    // Brazilian numbers: 10-13 digits (with/without country code and 9th digit)
+    // International: can vary, be more lenient
+    if (phone.length < 8 || phone.length > 18) {
+      console.log(`[Webhook] Phone number has unusual length (${phone.length}): ${phone}`);
+      return null;
+    }
+    return phone;
+  }
+  
+  return null;
+}
+
+/**
+ * Check if a phone value is a LID identifier (not a real phone number)
+ */
+function isLidIdentifier(phone: string): boolean {
+  return phone.startsWith('lid:');
+}
+
+/**
+ * Resolve a LID identifier to an actual phone number using Evolution API
+ * Uses the chat/find endpoint to look up contact info
+ */
+async function resolveLidToPhone(
+  instanceName: string,
+  lidIdentifier: string
+): Promise<string | null> {
+  try {
+    const systemConfig = await getEvolutionApiConfig();
+    if (!systemConfig) {
+      console.log('[Webhook] Cannot resolve LID: Evolution API not configured');
+      return null;
+    }
+
+    const lidValue = lidIdentifier.replace('lid:', '');
+    const lidJid = `${lidValue}@lid`;
+
+    console.log(`[Webhook] Attempting to resolve LID: ${lidJid}`);
+
+    // Try to find contact info via Evolution API
+    // Method 1: Use the chat/findContacts endpoint
+    try {
+      const response = await fetch(
+        `${systemConfig.apiUrl}/chat/fetchPhoneNumber/${instanceName}`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'apikey': systemConfig.apiKey,
+          },
+          body: JSON.stringify({
+            where: {
+              lidJid: lidJid
+            }
+          })
+        }
+      );
+
+      if (response.ok) {
+        const data = await response.json();
+        const resolvedPhone = data?.phoneNumber || data?.phone || data?.jid?.split('@')[0];
+        if (resolvedPhone && /^\d{8,18}$/.test(resolvedPhone)) {
+          console.log(`[Webhook] LID resolved to phone: ${resolvedPhone}`);
+          return resolvedPhone;
+        }
+      }
+    } catch (err) {
+      console.log('[Webhook] fetchPhoneNumber endpoint failed, trying alternative:', err);
+    }
+
+    // Method 2: Try getBaseProfile endpoint which might include phone number
+    try {
+      const response = await fetch(
+        `${systemConfig.apiUrl}/chat/getBaseProfile/${instanceName}?jid=${encodeURIComponent(lidJid)}`,
+        {
+          method: 'GET',
+          headers: {
+            'apikey': systemConfig.apiKey,
+          },
+        }
+      );
+
+      if (response.ok) {
+        const data = await response.json();
+        const resolvedPhone = data?.id?.split('@')[0] || data?.jid?.split('@')[0] || data?.phoneNumber;
+        if (resolvedPhone && /^\d{8,18}$/.test(resolvedPhone)) {
+          console.log(`[Webhook] LID resolved via profile to phone: ${resolvedPhone}`);
+          return resolvedPhone;
+        }
+      }
+    } catch (err) {
+      console.log('[Webhook] getBaseProfile endpoint failed:', err);
+    }
+
+    // Method 3: Try findContacts endpoint
+    try {
+      const response = await fetch(
+        `${systemConfig.apiUrl}/chat/findContacts/${instanceName}`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'apikey': systemConfig.apiKey,
+          },
+          body: JSON.stringify({
+            where: {
+              id: lidJid
+            }
+          })
+        }
+      );
+
+      if (response.ok) {
+        const data = await response.json();
+        // The response might be an array of contacts
+        const contacts = Array.isArray(data) ? data : [data];
+        for (const contact of contacts) {
+          const contactJid = contact?.id || contact?.jid || '';
+          const phoneMatch = contactJid.match(/^(\d{8,18})@/);
+          if (phoneMatch) {
+            console.log(`[Webhook] LID resolved via contacts to phone: ${phoneMatch[1]}`);
+            return phoneMatch[1];
+          }
+        }
+      }
+    } catch (err) {
+      console.log('[Webhook] findContacts endpoint failed:', err);
+    }
+
+    console.log(`[Webhook] Could not resolve LID ${lidJid} to phone number`);
+    return null;
+  } catch (error) {
+    console.error('[Webhook] Error resolving LID:', error);
     return null;
   }
-  return phone;
 }
 
 /**
@@ -200,7 +358,7 @@ interface EvolutionWebhookData {
   event: string;
   instance: string;
   data: {
-    key?: { remoteJid?: string; fromMe?: boolean; id?: string };
+    key?: { remoteJid?: string; fromMe?: boolean; id?: string; participant?: string };
     message?: {
       conversation?: string;
       extendedTextMessage?: { text?: string };
@@ -210,6 +368,8 @@ interface EvolutionWebhookData {
     };
     messageTimestamp?: number;
     pushName?: string;
+    notify?: string;
+    [key: string]: unknown;
   };
 }
 
@@ -261,9 +421,37 @@ async function processIncomingMessage(
     }
   }
 
-  const phone = extractPhoneFromJid(data.key?.remoteJid);
+  // Extract phone number or LID identifier from JID
+  let phone = extractPhoneFromJid(data.key?.remoteJid);
+  
+  // If primary JID extraction failed, try alternative fields
   if (!phone) {
-    console.log('[Webhook] Could not extract phone from JID');
+    // Try participant field (sometimes contains the real phone number for @lid messages)
+    const participantPhone = extractPhoneFromJid(data.key?.participant);
+    if (participantPhone && !isLidIdentifier(participantPhone)) {
+      phone = participantPhone;
+      console.log(`[Webhook] Phone extracted from participant field: ${phone}`);
+    }
+  }
+  
+  // If we got a LID identifier, try to resolve it to a real phone number
+  if (phone && isLidIdentifier(phone)) {
+    console.log(`[Webhook] LID detected, attempting phone resolution for: ${phone}`);
+    const resolvedPhone = await resolveLidToPhone(instanceName, phone);
+    if (resolvedPhone) {
+      phone = resolvedPhone;
+      console.log(`[Webhook] LID resolved successfully to: ${phone}`);
+    } else {
+      // Could not resolve LID - log the full JID for debugging
+      console.warn(`[Webhook] ⚠️ Could not resolve LID to phone number. JID: ${data.key?.remoteJid}, pushName: ${data.pushName || 'N/A'}`);
+      console.warn(`[Webhook] ⚠️ Message from this contact will be processed with LID session. Reply may fail.`);
+      // Still process the message - store it with the LID as identifier
+      // The AI response might fail when trying to send, but at least we record the incoming message
+    }
+  }
+  
+  if (!phone) {
+    console.warn(`[Webhook] Could not extract phone from JID: ${data.key?.remoteJid || 'undefined'}. Full key: ${JSON.stringify(data.key)}`);
     return;
   }
 
@@ -324,7 +512,7 @@ async function processIncomingMessage(
     return;
   }
 
-  console.log(`[Webhook] Processing message from ${phone}: ${messageText.substring(0, 50)}...`);
+  console.log(`[Webhook] Processing message from ${phone}${isLidIdentifier(phone) ? ' (LID session)' : ''}: ${messageText.substring(0, 50)}...`);
 
   // AUTO-CREATE CLIENT: Find or create client with phone number
   const pushName = data.pushName || undefined;
@@ -388,17 +576,20 @@ async function processIncomingMessage(
   }
 
   // Process message with AI
-  await processMessageWithAI(accountId, phone, messageText, clientId);
+  // If phone is a LID identifier, we need to resolve it before sending a reply
+  await processMessageWithAI(accountId, phone, messageText, clientId, instanceName);
 }
 
 /**
  * Process message with AI assistant
+ * Handles both normal phone numbers and LID identifiers
  */
 async function processMessageWithAI(
   accountId: string,
   phone: string,
   message: string,
-  clientId: string
+  clientId: string,
+  instanceName?: string
 ): Promise<void> {
   try {
     const integration = await db.integration.findUnique({
@@ -416,31 +607,69 @@ async function processMessageWithAI(
       return;
     }
 
+    // Determine the phone to use for AI context (prefer real phone over LID)
+    let phoneForContext = phone;
+    let phoneForSending = phone;
+    
+    if (isLidIdentifier(phone) && instanceName) {
+      // Try one more time to resolve the LID before sending
+      const resolved = await resolveLidToPhone(instanceName, phone);
+      if (resolved) {
+        phoneForSending = resolved;
+        phoneForContext = resolved;
+        console.log(`[Webhook] LID resolved before sending: ${phone} → ${resolved}`);
+      } else {
+        console.warn(`[Webhook] ⚠️ Cannot send reply - LID ${phone} could not be resolved to phone number`);
+        console.warn(`[Webhook] ⚠️ AI response will be generated but NOT delivered via WhatsApp`);
+        // Still generate the AI response and save it, but sending will fail
+      }
+    }
+
     // Generate AI response with full context
-    const response = await generateAIResponse(accountId, phone, message);
+    const response = await generateAIResponse(accountId, phoneForContext, message);
 
     if (response) {
       const savedMessage = await db.whatsappMessage.create({
         data: {
           accountId,
-          clientPhone: phone,
+          clientPhone: phoneForContext,
           direction: 'outgoing',
           message: response,
           messageType: 'text',
           status: 'pending',
-          metadata: { autoReply: true }
+          metadata: { 
+            autoReply: true,
+            originalIdentifier: isLidIdentifier(phone) ? phone : undefined,
+          }
         }
       });
 
-      const sendResult = await sendWhatsAppMessage(accountId, phone, response);
+      // Only try to send if we have a real phone number
+      if (!isLidIdentifier(phoneForSending)) {
+        const sendResult = await sendWhatsAppMessage(accountId, phoneForSending, response);
 
-      await db.whatsappMessage.update({
-        where: { id: savedMessage.id },
-        data: { 
-          status: sendResult.success ? 'sent' : 'failed',
-          metadata: { autoReply: true, error: sendResult.error }
-        }
-      });
+        await db.whatsappMessage.update({
+          where: { id: savedMessage.id },
+          data: { 
+            status: sendResult.success ? 'sent' : 'failed',
+            metadata: { autoReply: true, error: sendResult.error }
+          }
+        });
+      } else {
+        // Mark as failed since we can't deliver to a LID
+        await db.whatsappMessage.update({
+          where: { id: savedMessage.id },
+          data: { 
+            status: 'failed',
+            metadata: { 
+              autoReply: true, 
+              error: 'Cannot send to LID identifier - phone number not resolvable',
+              originalIdentifier: phone,
+            }
+          }
+        });
+        console.warn(`[Webhook] ⚠️ AI response saved but NOT sent - could not resolve LID to phone: ${phone}`);
+      }
     }
   } catch (error) {
     console.error('[Webhook] Error processing AI response:', error);
@@ -540,6 +769,28 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const event = body.event || '';
 
+    // Enhanced logging for message events - helps debug LID and phone issues
+    if (event === 'MESSAGES_UPSERT' || event === 'messages.upsert') {
+      const jid = body.data?.key?.remoteJid || 'unknown';
+      const fromMe = body.data?.key?.fromMe || false;
+      const pushName = body.data?.pushName || 'unknown';
+      const hasText = !!(body.data?.message?.conversation || body.data?.message?.extendedTextMessage?.text);
+      const hasAudio = !!body.data?.message?.audioMessage;
+      const hasImage = !!body.data?.message?.imageMessage;
+      
+      console.log(`[Webhook] 📨 Message event - JID: ${jid}, fromMe: ${fromMe}, pushName: ${pushName}, text: ${hasText}, audio: ${hasAudio}, image: ${hasImage}`);
+      
+      // Log JID format for debugging LID issues
+      if (jid.includes('@lid')) {
+        console.log(`[Webhook] 🔍 LID format detected in incoming message. Full data key: ${JSON.stringify(body.data?.key)}`);
+      }
+      
+      // Also log the participant field if present (may contain real phone for LID messages)
+      if (body.data?.key?.participant) {
+        console.log(`[Webhook] 🔍 Participant field present: ${body.data.key.participant}`);
+      }
+    }
+
     switch (event) {
       case 'MESSAGES_UPSERT':
       case 'messages.upsert':
@@ -584,6 +835,6 @@ export async function GET() {
     status: 'ok',
     message: 'Evolution API Webhook endpoint is active',
     timestamp: new Date().toISOString(),
-    features: ['text', 'image', 'audio_transcription', 'auto_client_creation', 'name_detection', 'payment_preference_detection', 'message_deduplication']
+    features: ['text', 'image', 'audio_transcription', 'auto_client_creation', 'name_detection', 'payment_preference_detection', 'message_deduplication', 'lid_resolution', 'enhanced_jid_parsing']
   });
 }
