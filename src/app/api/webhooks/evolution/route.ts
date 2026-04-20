@@ -578,18 +578,40 @@ async function processIncomingMessage(
           // This works if the same person previously contacted us with a regular phone number
           const pushName = data.pushName;
           if (pushName) {
-            // Find client by push name - filter for non-LID phone in code
-            const clientsByName = await db.client.findMany({
+            // Strategy 1: Find client by exact whatsapp push name
+            const clientsByPushName = await db.client.findMany({
               where: {
                 accountId: lidAccountId,
                 whatsappPushName: pushName,
               }
             });
-            const clientByName = clientsByName.find(c => !c.phone.startsWith('lid:'));
+            let clientByName = clientsByPushName.find(c => !c.phone.startsWith('lid:'));
+            
+            // Strategy 2: Find client by name containing the push name
+            if (!clientByName) {
+              const clientsByClientName = await db.client.findMany({
+                where: {
+                  accountId: lidAccountId,
+                  name: { contains: pushName, mode: 'insensitive' },
+                }
+              });
+              clientByName = clientsByClientName.find(c => !c.phone.startsWith('lid:'));
+              if (clientByName) {
+                console.log(`[Webhook] LID resolved via client name match`);
+              }
+            }
             
             if (clientByName && !clientByName.phone.startsWith('lid:')) {
               phone = clientByName.phone;
-              console.log(`[Webhook] LID resolved via push name match to: ${phone}`);
+              console.log(`[Webhook] LID resolved via name/pushName match to: ${phone}`);
+              
+              // Update the client's whatsappPushName for future matching
+              if (clientByName.whatsappPushName !== pushName) {
+                await db.client.update({
+                  where: { id: clientByName.id },
+                  data: { whatsappPushName: pushName }
+                });
+              }
             } else {
               console.warn(`[Webhook] ⚠️ Could not resolve LID to phone number. JID: ${data.key?.remoteJid}, pushName: ${pushName || 'N/A'}`);
             }
