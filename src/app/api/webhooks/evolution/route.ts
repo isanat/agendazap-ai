@@ -573,13 +573,14 @@ async function processIncomingMessage(
         // This works if the same person previously contacted us with a regular phone number
         const pushName = data.pushName;
         if (pushName) {
-          const clientByName = await db.client.findFirst({
+          // Find client by push name - filter for non-LID phone in code
+          const clientsByName = await db.client.findMany({
             where: {
               accountId,
               whatsappPushName: pushName,
-              phone: { not: { startsWith: 'lid:' } }
             }
           });
+          const clientByName = clientsByName.find(c => !c.phone.startsWith('lid:'));
           
           if (clientByName && !clientByName.phone.startsWith('lid:')) {
             phone = clientByName.phone;
