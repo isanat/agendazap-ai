@@ -221,14 +221,14 @@ async function processIncomingMessage(
     return;
   }
 
-  // CHECK FOR DUPLICATES
+  // CHECK FOR DUPLICATES using ProcessedMessage table
   const messageId = data.key?.id;
   if (messageId) {
-    const existingMessage = await db.whatsappMessage.findFirst({
-      where: { metadata: { path: ['messageId'], equals: messageId } }
+    const existingProcessed = await db.processedMessage.findUnique({
+      where: { messageId }
     });
     
-    if (existingMessage) {
+    if (existingProcessed) {
       console.log(`[Webhook] Skipping duplicate message: ${messageId}`);
       return;
     }
@@ -343,6 +343,22 @@ async function processIncomingMessage(
     where: { id: clientId },
     data: { lastAiInteraction: new Date() }
   });
+
+  // Record processed message for deduplication (7-day TTL)
+  if (messageId) {
+    await db.processedMessage.create({
+      data: {
+        messageId,
+        accountId,
+        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days TTL
+      }
+    }).catch(err => {
+      // Ignore unique constraint violations (race condition)
+      if (!String(err).includes('Unique')) {
+        console.error('[Webhook] Error recording processed message:', err);
+      }
+    });
+  }
 
   // Process message with AI
   await processMessageWithAI(accountId, phone, messageText, clientId);
@@ -518,12 +534,23 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// GET - Health check
+// GET - Health check + cleanup expired dedup records
 export async function GET() {
+  // Cleanup expired ProcessedMessage records (async, don't block response)
+  db.processedMessage.deleteMany({
+    where: { expiresAt: { lt: new Date() } }
+  }).then(result => {
+    if (result.count > 0) {
+      console.log(`[Webhook] Cleaned up ${result.count} expired dedup records`);
+    }
+  }).catch(err => {
+    console.error('[Webhook] Error cleaning up dedup records:', err);
+  });
+
   return NextResponse.json({
     status: 'ok',
     message: 'Evolution API Webhook endpoint is active',
     timestamp: new Date().toISOString(),
-    features: ['text', 'image', 'audio_transcription', 'auto_client_creation', 'name_detection', 'payment_preference_detection']
+    features: ['text', 'image', 'audio_transcription', 'auto_client_creation', 'name_detection', 'payment_preference_detection', 'message_deduplication']
   });
 }

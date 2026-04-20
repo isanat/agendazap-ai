@@ -538,6 +538,17 @@ model RefreshToken {
   @@index([expiresAt])
 }
 
+model ProcessedMessage {
+  id          String   @id @default(cuid())
+  messageId   String   @unique // WhatsApp message ID from Evolution API
+  accountId   String
+  processedAt DateTime @default(now())
+  expiresAt   DateTime // TTL for automatic cleanup
+
+  @@index([expiresAt])
+  @@index([accountId, processedAt])
+}
+
 model WhatsappMessage {
   id            String   @id @default(cuid())
   accountId     String
