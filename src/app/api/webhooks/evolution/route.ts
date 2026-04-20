@@ -555,56 +555,54 @@ async function processIncomingMessage(
           // Try database: find client by push name or client name
           const pushName = data.pushName;
           if (pushName) {
-            // Strategy 1: Find client by exact whatsapp push name
-            const clientsByPushName = await db.client.findMany({
-              where: { accountId: lidAccountId, whatsappPushName: pushName },
+            // Load ALL clients for this account and filter in code
+            // This avoids Prisma query compatibility issues
+            const allClients = await db.client.findMany({
+              where: { accountId: lidAccountId },
               select: { id: true, name: true, phone: true, whatsappPushName: true }
             });
-            let clientByName = clientsByPushName.find(c => !c.phone.startsWith('lid:'));
             
-            // Strategy 2: Find client by name containing the push name
-            if (!clientByName) {
-              const clientsByClientName = await db.client.findMany({
-                where: { accountId: lidAccountId, name: { contains: pushName } },
-                select: { id: true, name: true, phone: true, whatsappPushName: true }
-              });
-              clientByName = clientsByClientName.find(c => !c.phone.startsWith('lid:'));
+            // Find a client with a non-LID phone that matches by:
+            // 1. Exact whatsappPushName match
+            // 2. Name contains pushName (case-insensitive in code)
+            // 3. Any client with a valid real phone number (last resort - use most recent)
+            let matchedClient = allClients.find(c => 
+              !c.phone.startsWith('lid:') && 
+              /^\d{10,15}$/.test(c.phone) &&
+              c.whatsappPushName === pushName
+            );
+            
+            if (!matchedClient) {
+              matchedClient = allClients.find(c => 
+                !c.phone.startsWith('lid:') && 
+                /^\d{10,15}$/.test(c.phone) &&
+                c.name && c.name.toLowerCase().includes(pushName.toLowerCase())
+              );
             }
             
-            // Strategy 3: Find phone from previous successful outgoing messages with this pushName
-            if (!clientByName) {
-              // Look at incoming messages where pushName matches in metadata
-              const recentMessages = await db.whatsappMessage.findMany({
-                where: {
-                  accountId: lidAccountId,
-                  direction: 'incoming',
-                  metadata: { contains: pushName }
-                },
-                orderBy: { createdAt: 'desc' },
-                take: 10,
-                select: { clientPhone: true, metadata: true }
-              });
-              
-              // Find a phone number that's NOT a LID from these messages
-              for (const msg of recentMessages) {
-                if (msg.clientPhone && !msg.clientPhone.startsWith('lid:') && /^\d{8,15}$/.test(msg.clientPhone.replace(/\D/g, ''))) {
-                  // Found a real phone number associated with this pushName
-                  clientByName = { id: '', name: pushName, phone: msg.clientPhone, whatsappPushName: pushName } as any;
-                  console.log(`[Webhook] LID resolved via message history to: ${msg.clientPhone}`);
-                  break;
-                }
+            if (!matchedClient) {
+              // Last resort: find any client with a real phone that had recent interactions
+              // This handles the case where the pushName doesn't match but it's the same person
+              const clientsWithRealPhone = allClients.filter(c => 
+                !c.phone.startsWith('lid:') && 
+                /^\d{10,15}$/.test(c.phone)
+              );
+              // If there's only one client with a real phone, use that
+              if (clientsWithRealPhone.length === 1) {
+                matchedClient = clientsWithRealPhone[0];
+                console.log(`[Webhook] LID resolved via single-client fallback to: ${matchedClient.phone}`);
               }
             }
             
-            if (clientByName && !clientByName.phone.startsWith('lid:')) {
-              phone = clientByName.phone;
-              console.log(`[Webhook] LID resolved via database name match to: ${phone}`);
+            if (matchedClient) {
+              phone = matchedClient.phone;
+              console.log(`[Webhook] LID resolved via database match to: ${phone}`);
               
-              // Update whatsappPushName for future matching (don't update phone - would violate unique constraint)
-              if (clientByName.whatsappPushName !== pushName && clientByName.id) {
+              // Update whatsappPushName for future matching
+              if (matchedClient.whatsappPushName !== pushName) {
                 try {
                   await db.client.update({
-                    where: { id: clientByName.id },
+                    where: { id: matchedClient.id },
                     data: { whatsappPushName: pushName }
                   });
                 } catch (updateErr) {
@@ -612,15 +610,13 @@ async function processIncomingMessage(
                 }
               }
               
-              // Also update the LID client's phone if it exists separately
-              // But be careful not to violate unique constraint - delete the LID client instead
-              if (clientByName.id) {
+              // Also clean up duplicate LID clients
+              if (matchedClient.id) {
                 try {
                   const lidClient = await db.client.findFirst({
                     where: { accountId: lidAccountId, phone: { contains: lidValue } }
                   });
-                  if (lidClient && lidClient.id !== clientByName.id && lidClient.phone.startsWith('lid:')) {
-                    // Delete the LID client to avoid duplicates (the matching client already exists)
+                  if (lidClient && lidClient.id !== matchedClient.id && lidClient.phone.startsWith('lid:')) {
                     await db.client.delete({ where: { id: lidClient.id } });
                     console.log(`[Webhook] Deleted duplicate LID client ${lidClient.id}`);
                   }
