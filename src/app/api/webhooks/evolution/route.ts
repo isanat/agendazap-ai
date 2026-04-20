@@ -104,6 +104,47 @@ async function getEvolutionApiConfig(): Promise<{ apiUrl: string; apiKey: string
 }
 
 /**
+ * Send a WhatsApp message directly to a JID (works with LID addresses)
+ * This is used as a fallback when the phone number can't be resolved from a LID
+ */
+async function sendWhatsAppMessageToJid(
+  instanceName: string,
+  jid: string,
+  message: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const systemConfig = await getEvolutionApiConfig();
+    if (!systemConfig) {
+      return { success: false, error: 'Evolution API not configured' };
+    }
+
+    console.log(`[Webhook] Sending message directly to JID: ${jid}`);
+
+    const response = await fetch(`${systemConfig.apiUrl}/message/sendText/${instanceName}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': systemConfig.apiKey,
+      },
+      body: JSON.stringify({
+        number: jid, // Send directly to JID format (e.g., "147102780940432@lid")
+        options: { delay: 1500, presence: 'composing' },
+        textMessage: { text: message },
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      return { success: false, error: `API error: ${response.status} - ${errorText.substring(0, 200)}` };
+    }
+
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+  }
+}
+
+/**
  * Send a WhatsApp message via Evolution API
  */
 async function sendWhatsAppMessage(
@@ -137,6 +178,13 @@ async function sendWhatsAppMessage(
     }
 
     let formattedPhone = phone.replace(/\D/g, '');
+    
+    // Validate phone number - must be a reasonable length for a phone number
+    // Brazilian: 10-13 digits (with/without country code and 9th digit)
+    // International: typically 8-15 digits
+    if (formattedPhone.length < 8 || formattedPhone.length > 15) {
+      return { success: false, error: `Invalid phone number format: ${formattedPhone} (${formattedPhone.length} digits)` };
+    }
 
     if (!formattedPhone.startsWith('55') && formattedPhone.length >= 10 && formattedPhone.length <= 11) {
       formattedPhone = '55' + formattedPhone;
@@ -629,8 +677,8 @@ async function processIncomingMessage(
   }
 
   // Process message with AI
-  // If phone is a LID identifier, we need to resolve it before sending a reply
-  await processMessageWithAI(accountId, phone, messageText, clientId, instanceName);
+  // Pass the original JID so we can send directly to it if phone number resolution fails
+  await processMessageWithAI(accountId, phone, messageText, clientId, instanceName, data.key?.remoteJid);
 }
 
 /**
@@ -642,7 +690,8 @@ async function processMessageWithAI(
   phone: string,
   message: string,
   clientId: string,
-  instanceName?: string
+  instanceName?: string,
+  originalJid?: string
 ): Promise<void> {
   const processStart = Date.now();
   try {
@@ -715,30 +764,84 @@ async function processMessageWithAI(
           console.log(`[Webhook] ✅ Message sent successfully to ${phoneForSending}`);
         } else {
           console.error(`[Webhook] ❌ Failed to send message to ${phoneForSending}: ${sendResult.error}`);
-        }
-
-        await db.whatsappMessage.update({
-          where: { id: savedMessage.id },
-          data: { 
-            status: sendResult.success ? 'sent' : 'failed',
-            metadata: { autoReply: true, error: sendResult.error, processingTimeMs: aiTime }
-          }
-        });
-      } else {
-        // Mark as failed since we can't deliver to a LID
-        await db.whatsappMessage.update({
-          where: { id: savedMessage.id },
-          data: { 
-            status: 'failed',
-            metadata: { 
-              autoReply: true, 
-              error: 'Cannot send to LID identifier - phone number not resolvable',
-              originalIdentifier: phone,
-              processingTimeMs: aiTime,
+          // If sending to phone number failed and we have a JID, try sending directly to JID
+          if (originalJid && instanceName) {
+            console.log(`[Webhook] 📤 Retrying: Sending directly to JID ${originalJid}...`);
+            const jidResult = await sendWhatsAppMessageToJid(instanceName, originalJid, response);
+            if (jidResult.success) {
+              console.log(`[Webhook] ✅ Message sent successfully to JID ${originalJid}`);
+            } else {
+              console.error(`[Webhook] ❌ Failed to send to JID ${originalJid}: ${jidResult.error}`);
             }
+            await db.whatsappMessage.update({
+              where: { id: savedMessage.id },
+              data: { 
+                status: jidResult.success ? 'sent' : 'failed',
+                metadata: { autoReply: true, error: jidResult.success ? null : jidResult.error, sentViaJid: true, processingTimeMs: aiTime }
+              }
+            });
+          } else {
+            await db.whatsappMessage.update({
+              where: { id: savedMessage.id },
+              data: { 
+                status: 'failed',
+                metadata: { autoReply: true, error: sendResult.error, processingTimeMs: aiTime }
+              }
+            });
           }
-        });
-        console.warn(`[Webhook] ⚠️ AI response saved but NOT sent - could not resolve LID to phone: ${phone}`);
+        }
+        
+        // Update status if first send succeeded
+        if (sendResult.success) {
+          await db.whatsappMessage.update({
+            where: { id: savedMessage.id },
+            data: { 
+              status: 'sent',
+              metadata: { autoReply: true, processingTimeMs: aiTime }
+            }
+          });
+        }
+      } else {
+        // Phone is a LID - try sending directly to the original JID as fallback
+        if (originalJid && instanceName) {
+          console.log(`[Webhook] 📤 LID detected, sending directly to JID ${originalJid}...`);
+          const jidResult = await sendWhatsAppMessageToJid(instanceName, originalJid, response);
+          
+          if (jidResult.success) {
+            console.log(`[Webhook] ✅ Message sent successfully to JID ${originalJid}`);
+          } else {
+            console.error(`[Webhook] ❌ Failed to send to JID ${originalJid}: ${jidResult.error}`);
+          }
+          
+          await db.whatsappMessage.update({
+            where: { id: savedMessage.id },
+            data: { 
+              status: jidResult.success ? 'sent' : 'failed',
+              metadata: { 
+                autoReply: true, 
+                error: jidResult.success ? null : `JID send failed: ${jidResult.error}`,
+                sentViaJid: true,
+                originalIdentifier: phone,
+                processingTimeMs: aiTime,
+              }
+            }
+          });
+        } else {
+          // No JID available - mark as failed
+          await db.whatsappMessage.update({
+            where: { id: savedMessage.id },
+            data: { 
+              status: 'failed',
+              metadata: { 
+                autoReply: true, 
+                error: 'Cannot send to LID identifier - no JID fallback available',
+                originalIdentifier: phone,
+                processingTimeMs: aiTime,
+              }
+            }
+          });
+          console.warn(`[Webhook] ⚠️ AI response saved but NOT sent - could not resolve LID and no JID available: ${phone}`);
+        }
       }
     } else {
       console.error(`[Webhook] ❌ AI response was null for message from ${phoneForContext}`);
