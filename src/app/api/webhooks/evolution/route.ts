@@ -4,6 +4,33 @@ import { generateChatCompletion, canAccountUseAI, transcribeAudioBase64, type Ch
 import { generateSystemPrompt, findOrCreateClient, detectNameInMessage, updateClientName, detectPaymentPreference, updateClientPaymentPreference } from '@/lib/ai-context-service';
 
 /**
+ * Verify webhook request authenticity
+ * Checks for Evolution API key or custom webhook secret
+ */
+function verifyWebhookRequest(request: NextRequest): boolean {
+  const webhookSecret = process.env.EVOLUTION_WEBHOOK_SECRET;
+  
+  // If no webhook secret is configured, skip verification (backward compatible)
+  if (!webhookSecret) {
+    return true;
+  }
+  
+  // Check custom webhook secret header
+  const providedSecret = request.headers.get('x-webhook-secret');
+  if (providedSecret === webhookSecret) {
+    return true;
+  }
+  
+  // Check Evolution API key header (alternative method)
+  const apikey = request.headers.get('apikey');
+  if (apikey === process.env.EVOLUTION_API_KEY) {
+    return true;
+  }
+  
+  return false;
+}
+
+/**
  * Get Evolution API configuration from environment variables or database
  */
 async function getEvolutionApiConfig(): Promise<{ apiUrl: string; apiKey: string } | null> {
@@ -503,6 +530,12 @@ async function updateConnectionStatus(instanceName: string, state: string): Prom
 
 // POST - Handle webhook from Evolution API
 export async function POST(request: NextRequest) {
+  // Verify webhook authenticity
+  if (!verifyWebhookRequest(request)) {
+    console.warn('[Webhook] Unauthorized request - invalid or missing webhook secret');
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
   try {
     const body = await request.json();
     const event = body.event || '';
