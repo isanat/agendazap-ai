@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { generateChatCompletion, canAccountUseAI, transcribeAudioBase64, type ChatMessage } from '@/lib/ai-provider-service';
-import { generateSystemPrompt } from '@/lib/ai-context-service';
+import { generateSystemPrompt, findOrCreateClient, detectNameInMessage, updateClientName, detectPaymentPreference, updateClientPaymentPreference } from '@/lib/ai-context-service';
 
 /**
  * Get Evolution API configuration from environment variables or database
@@ -270,11 +270,9 @@ async function processIncomingMessage(
     const mimeType = data.message.audioMessage.mimetype || 'audio/ogg';
     
     if (mediaKey) {
-      // Download audio via Evolution API first
       const downloadResult = await downloadMedia(instanceName, mediaKey, mimeType);
       
       if (downloadResult.success && downloadResult.base64) {
-        // Transcribe the base64 audio
         const transcribeResult = await transcribeAudioBase64(downloadResult.base64, mimeType);
         
         if (transcribeResult.success && transcribeResult.text) {
@@ -301,6 +299,24 @@ async function processIncomingMessage(
 
   console.log(`[Webhook] Processing message from ${phone}: ${messageText.substring(0, 50)}...`);
 
+  // AUTO-CREATE CLIENT: Find or create client with phone number
+  const pushName = data.pushName || undefined;
+  const clientId = await findOrCreateClient(accountId, phone, pushName);
+
+  // DETECT NAME: Check if user is providing their name
+  const detectedName = detectNameInMessage(messageText);
+  if (detectedName) {
+    await updateClientName(clientId, detectedName);
+    console.log(`[Webhook] Name detected and updated: ${detectedName}`);
+  }
+
+  // DETECT PAYMENT PREFERENCE: Check if user mentions payment method
+  const detectedPayment = detectPaymentPreference(messageText);
+  if (detectedPayment) {
+    await updateClientPaymentPreference(clientId, detectedPayment);
+    console.log(`[Webhook] Payment preference detected: ${detectedPayment}`);
+  }
+
   // Save message to database
   await db.whatsappMessage.create({
     data: {
@@ -315,13 +331,21 @@ async function processIncomingMessage(
         pushName: data.pushName,
         timestamp: data.messageTimestamp,
         audioTranscribed,
+        detectedName: detectedName || undefined,
+        detectedPayment: detectedPayment || undefined,
         raw: data.message
       }
     }
   });
 
+  // Update last AI interaction
+  await db.client.update({
+    where: { id: clientId },
+    data: { lastAiInteraction: new Date() }
+  });
+
   // Process message with AI
-  await processMessageWithAI(accountId, phone, messageText);
+  await processMessageWithAI(accountId, phone, messageText, clientId);
 }
 
 /**
@@ -330,7 +354,8 @@ async function processIncomingMessage(
 async function processMessageWithAI(
   accountId: string,
   phone: string,
-  message: string
+  message: string,
+  clientId: string
 ): Promise<void> {
   try {
     const integration = await db.integration.findUnique({
@@ -397,8 +422,8 @@ async function generateAIResponse(
     // Generate system prompt with full salon and client context
     const systemPrompt = await generateSystemPrompt(accountId, phone);
     
-    // Get conversation history
-    const history = await getConversationHistory(accountId, phone, 6);
+    // Get conversation history from database (more reliable than in-memory)
+    const history = await getConversationHistory(accountId, phone, 10);
 
     const messages: ChatMessage[] = [
       { role: 'system', content: systemPrompt },
@@ -441,7 +466,7 @@ async function getFallbackResponse(accountId: string, message: string): Promise<
     return `Estamos em ${account?.address || 'nossa localização'}. Funcionamos de ${account?.openingTime || '9h'} às ${account?.closingTime || '18h'}. Posso te ajudar com mais alguma coisa?`;
   }
   
-  return `Olá! Sou a assistente virtual de ${businessName}. Como posso te ajudar hoje? 😊`;
+  return `Olá! Sou a Luna, assistente virtual de ${businessName}. Como posso te ajudar hoje? 😊`;
 }
 
 /**
@@ -499,6 +524,6 @@ export async function GET() {
     status: 'ok',
     message: 'Evolution API Webhook endpoint is active',
     timestamp: new Date().toISOString(),
-    features: ['text', 'image', 'audio_transcription']
+    features: ['text', 'image', 'audio_transcription', 'auto_client_creation', 'name_detection', 'payment_preference_detection']
   });
 }

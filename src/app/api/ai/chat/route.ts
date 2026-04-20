@@ -1,10 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { generateChatCompletion, canAccountUseAI, type ChatMessage } from '@/lib/ai-provider-service'
-import { generateSystemPrompt } from '@/lib/ai-context-service'
-
-// Store conversations in memory (in production, use Redis or database)
-const conversations = new Map<string, Array<{ role: 'user' | 'assistant'; content: string }>>()
+import { generateSystemPrompt, findOrCreateClient, detectNameInMessage, updateClientName, detectPaymentPreference, updateClientPaymentPreference } from '@/lib/ai-context-service'
 
 // Get account info for context
 async function getAccountInfo(accountId?: string) {
@@ -62,14 +59,38 @@ export async function POST(request: NextRequest) {
     const accountInfo = await getAccountInfo(accountId)
     
     // Generate system prompt with full salon context
-    // For now, we use a phone number from context or generate a session-based one
     const clientPhone = context?.phone || sessionId
     
+    // Auto-create or find client
+    const clientId = await findOrCreateClient(accountId, clientPhone, context?.pushName)
+    
+    // Detect name from message
+    const detectedName = detectNameInMessage(message)
+    if (detectedName) {
+      await updateClientName(clientId, detectedName)
+    }
+
+    // Detect payment preference
+    const detectedPayment = detectPaymentPreference(message)
+    if (detectedPayment) {
+      await updateClientPaymentPreference(clientId, detectedPayment)
+    }
+
     const SYSTEM_PROMPT = await generateSystemPrompt(accountId, clientPhone)
 
-    // Get or create conversation history
-    let history = conversations.get(sessionId) || []
+    // Get conversation history from database (more reliable than in-memory)
+    const dbMessages = await db.whatsappMessage.findMany({
+      where: { accountId, clientPhone },
+      orderBy: { createdAt: 'desc' },
+      take: 20,
+      select: { direction: true, message: true }
+    })
     
+    const history: ChatMessage[] = dbMessages.reverse().map(m => ({
+      role: m.direction === 'incoming' ? 'user' as const : 'assistant' as const,
+      content: m.message || ''
+    }))
+
     // Build messages array
     const messages: ChatMessage[] = [
       { role: 'system', content: SYSTEM_PROMPT }
@@ -113,16 +134,36 @@ export async function POST(request: NextRequest) {
 
     const aiResponse = result.content
 
-    // Update conversation history
-    history.push({ role: 'user', content: message })
-    history.push({ role: 'assistant', content: aiResponse })
-    
-    // Keep only last 20 messages to avoid token limits
-    if (history.length > 20) {
-      history = history.slice(-20)
-    }
-    
-    conversations.set(sessionId, history)
+    // Save conversation to database for persistence
+    await db.whatsappMessage.create({
+      data: {
+        accountId,
+        clientPhone,
+        direction: 'incoming',
+        message,
+        messageType: 'text',
+        status: 'received',
+        metadata: { sessionId, detectedName: detectedName || undefined, detectedPayment: detectedPayment || undefined }
+      }
+    })
+
+    await db.whatsappMessage.create({
+      data: {
+        accountId,
+        clientPhone,
+        direction: 'outgoing',
+        message: aiResponse,
+        messageType: 'text',
+        status: 'sent',
+        metadata: { sessionId, autoReply: true, provider: result.provider }
+      }
+    })
+
+    // Update last AI interaction
+    await db.client.update({
+      where: { id: clientId },
+      data: { lastAiInteraction: new Date() }
+    })
 
     // Detect intent from the message
     const intent = detectIntent(message)
@@ -137,8 +178,9 @@ export async function POST(request: NextRequest) {
       tokens: result.totalTokens,
       intent,
       entities,
-      messageCount: history.length,
-      fallbackUsed: result.fallbackUsed
+      fallbackUsed: result.fallbackUsed,
+      detectedName: detectedName || undefined,
+      detectedPayment: detectedPayment || undefined
     })
   } catch (error) {
     console.error('AI Chat error:', error)
@@ -167,7 +209,7 @@ function getFallbackResponse(message: string, accountInfo?: { businessName?: str
     return `Estamos em ${accountInfo?.address || 'nossa localização'}. Como posso te ajudar?`
   }
   
-  return `Olá! Sou a assistente virtual de ${businessName}. Como posso te ajudar hoje? 😊`
+  return `Olá! Sou a Luna, assistente virtual de ${businessName}. Como posso te ajudar hoje? 😊`
 }
 
 // Detect customer intent
@@ -191,6 +233,9 @@ function detectIntent(message: string): string {
   }
   if (lowerMessage.includes('endereço') || lowerMessage.includes('onde fica') || lowerMessage.includes('localização') || lowerMessage.includes('como chegar') || lowerMessage.includes('qual o endereço') || lowerMessage.includes('qual endereço')) {
     return 'address'
+  }
+  if (lowerMessage.includes('pagamento') || lowerMessage.includes('pagar') || lowerMessage.includes('pix') || lowerMessage.includes('cartão') || lowerMessage.includes('dinheiro')) {
+    return 'payment'
   }
   if (lowerMessage.includes('instagram') || lowerMessage.includes('@') || lowerMessage.includes('rede social') || lowerMessage.includes('facebook') || lowerMessage.includes('conhecer') || lowerMessage.includes('não conheço') || lowerMessage.includes('nao conheco') || lowerMessage.includes('primeira vez')) {
     return 'social'
@@ -244,6 +289,18 @@ function extractEntities(message: string): Record<string, string | undefined> {
   if (instagramMatch) {
     entities.instagram = instagramMatch[0]
   }
+
+  // Extract name from name patterns
+  const nameMatch = detectNameInMessage(message)
+  if (nameMatch) {
+    entities.name = nameMatch
+  }
+
+  // Extract payment preference
+  const paymentPref = detectPaymentPreference(message)
+  if (paymentPref) {
+    entities.paymentPreference = paymentPref
+  }
   
   return entities
 }
@@ -252,9 +309,14 @@ function extractEntities(message: string): Record<string, string | undefined> {
 export async function DELETE(request: NextRequest) {
   const { searchParams } = new URL(request.url)
   const sessionId = searchParams.get('sessionId')
+  const accountId = searchParams.get('accountId')
+  const clientPhone = searchParams.get('clientPhone')
   
-  if (sessionId) {
-    conversations.delete(sessionId)
+  if (clientPhone && accountId) {
+    // Delete from database
+    await db.whatsappMessage.deleteMany({
+      where: { accountId, clientPhone }
+    })
   }
   
   return NextResponse.json({ success: true, message: 'Conversation cleared' })
@@ -264,15 +326,27 @@ export async function DELETE(request: NextRequest) {
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url)
   const sessionId = searchParams.get('sessionId')
+  const accountId = searchParams.get('accountId')
+  const clientPhone = searchParams.get('clientPhone')
   
-  if (!sessionId) {
+  if (!accountId || !clientPhone) {
     return NextResponse.json(
-      { success: false, error: 'Session ID is required' },
+      { success: false, error: 'Account ID and clientPhone are required' },
       { status: 400 }
     )
   }
   
-  const history = conversations.get(sessionId) || []
+  const messages = await db.whatsappMessage.findMany({
+    where: { accountId, clientPhone },
+    orderBy: { createdAt: 'asc' },
+    select: { direction: true, message: true, createdAt: true }
+  })
+
+  const history = messages.map(m => ({
+    role: m.direction === 'incoming' ? 'user' : 'assistant',
+    content: m.message,
+    timestamp: m.createdAt
+  }))
   
   return NextResponse.json({
     success: true,

@@ -138,24 +138,29 @@ model BlockedSlot {
 }
 
 model Client {
-  id                 String               @id @default(cuid())
-  accountId          String
-  name               String
-  phone              String
-  email              String?
-  totalAppointments  Int                  @default(0)
-  noShowCount        Int                  @default(0)
-  lastVisit          DateTime?
-  noShowScore        Int                  @default(50)
-  notes              String?
-  createdAt          DateTime             @default(now())
-  updatedAt          DateTime             @updatedAt
-  loyaltyPoints      Int                  @default(0)
-  Appointment        Appointment[]
-  Account            Account              @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  ClientPackage      ClientPackage[]
-  LoyaltyTransaction LoyaltyTransaction[]
-  User               User?
+  id                    String               @id @default(cuid())
+  accountId             String
+  name                  String
+  phone                 String
+  email                 String?
+  totalAppointments     Int                  @default(0)
+  noShowCount           Int                  @default(0)
+  lastVisit             DateTime?
+  noShowScore           Int                  @default(50)
+  notes                 String?
+  paymentPreference     String?              // "pix", "credit_card", "cash", "in_person" - preferred payment method
+  whatsappPushName      String?              // Name from WhatsApp profile
+  serviceHistory        Json?                // Detailed history of services done [{serviceName, professionalName, date, status}]
+  aiNotes               String?              // Notes gathered by AI about client preferences and patterns
+  lastAiInteraction     DateTime?            // Last time AI interacted with this client
+  createdAt             DateTime             @default(now())
+  updatedAt             DateTime             @updatedAt
+  loyaltyPoints         Int                  @default(0)
+  Appointment           Appointment[]
+  Account               Account              @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  ClientPackage         ClientPackage[]
+  LoyaltyTransaction    LoyaltyTransaction[]
+  User                  User?
 
   @@unique([accountId, phone])
   @@index([accountId])
