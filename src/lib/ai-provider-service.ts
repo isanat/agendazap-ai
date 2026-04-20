@@ -2,16 +2,20 @@
  * AI Provider Service - Multi-provider AI with fallback support
  * 
  * This service manages multiple AI providers with:
- * - Zhipu AI (GLM-4) via public API for chat and audio transcription
+ * - Z.ai (via z-ai-web-dev-sdk) as primary provider for chat and audio transcription
+ * - Direct Zhipu AI API as secondary
  * - Groq (fallback) for chat and Whisper audio transcription
  * - Automatic fallback, rate limiting, and token tracking
  * 
- * Zhipu AI Public API: https://open.bigmodel.cn/api/paas/v4/
- * Models: glm-4-plus (faster for voice)
+ * The Z.ai SDK connects to the Z.ai platform which provides access to
+ * GLM-4 and other models with proper authentication and model routing.
  */
 
 import { db } from '@/lib/db';
 import { nanoid } from 'nanoid';
+import ZAI from 'z-ai-web-dev-sdk';
+import fs from 'fs';
+import path from 'path';
 
 // Types
 export interface AIProviderConfig {
@@ -49,7 +53,143 @@ export interface ChatCompletionResult {
 
 // Zhipu AI Configuration - uses environment variable or database
 const ZHIPU_API_URL = process.env.ZHIPU_API_URL || 'https://open.bigmodel.cn/api/paas/v4';
-const ZHIPU_API_KEY = process.env.ZHIPU_API_KEY; // Set this in Vercel environment variables
+const ZHIPU_API_KEY = process.env.ZHIPU_API_KEY;
+
+// Singleton ZAI SDK client
+let zaiClient: InstanceType<typeof ZAI> | null = null;
+let zaiClientInitPromise: Promise<InstanceType<typeof ZAI> | null> | null = null;
+
+/**
+ * Initialize ZAI SDK client
+ * Creates a .z-ai-config file from environment variables if needed,
+ * then initializes the ZAI SDK.
+ */
+async function getZaiClient(): Promise<InstanceType<typeof ZAI> | null> {
+  // Return cached client if available
+  if (zaiClient) return zaiClient;
+  
+  // If already initializing, wait for that
+  if (zaiClientInitPromise) return zaiClientInitPromise;
+  
+  zaiClientInitPromise = (async () => {
+    try {
+      // Check if .z-ai-config already exists
+      const configPath = path.join(process.cwd(), '.z-ai-config');
+      let needsConfig = false;
+      
+      try {
+        const existing = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+        if (!existing.baseUrl || !existing.apiKey) {
+          needsConfig = true;
+        }
+      } catch {
+        needsConfig = true;
+      }
+      
+      // Create config from environment variables if needed
+      if (needsConfig) {
+        const zaiBaseUrl = process.env.ZAI_BASE_URL;
+        const zaiApiKey = process.env.ZAI_API_KEY;
+        
+        if (!zaiBaseUrl || !zaiApiKey) {
+          console.log('[AI] ZAI SDK: Missing ZAI_BASE_URL or ZAI_API_KEY env vars, skipping SDK init');
+          return null;
+        }
+        
+        const config = {
+          baseUrl: zaiBaseUrl,
+          apiKey: zaiApiKey,
+        };
+        
+        // Try to write config file (may fail on read-only filesystems like Vercel)
+        try {
+          fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+        } catch (writeErr) {
+          // On Vercel, try /tmp instead
+          try {
+            const tmpConfigPath = '/tmp/.z-ai-config';
+            fs.writeFileSync(tmpConfigPath, JSON.stringify(config, null, 2));
+            // We can't use this path with ZAI.create() since it reads from specific locations
+            // So we'll need to use direct API calls
+            console.log('[AI] ZAI SDK: Config written to /tmp, but SDK needs cwd/home path. Using direct API mode.');
+            return null;
+          } catch {
+            console.log('[AI] ZAI SDK: Cannot write config file. Using direct API mode.');
+            return null;
+          }
+        }
+      }
+      
+      // Initialize ZAI SDK
+      const client = await ZAI.create();
+      zaiClient = client;
+      console.log('[AI] ZAI SDK initialized successfully');
+      return client;
+    } catch (error) {
+      console.error('[AI] ZAI SDK initialization failed:', error);
+      return null;
+    }
+  })();
+  
+  return zaiClientInitPromise;
+}
+
+/**
+ * Make a chat completion call using the Z.ai platform API directly
+ * (bypasses the file-based config requirement of the SDK)
+ */
+async function callZaiPlatform(
+  messages: ChatMessage[],
+  model?: string
+): Promise<{ content: string; inputTokens: number; outputTokens: number } | null> {
+  const baseUrl = process.env.ZAI_BASE_URL;
+  const apiKey = process.env.ZAI_API_KEY;
+  
+  if (!baseUrl || !apiKey) {
+    return null;
+  }
+  
+  console.log('[AI] Calling Z.ai platform API');
+  
+  try {
+    const response = await fetch(`${baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+        'X-Z-AI-From': 'Z',
+      },
+      body: JSON.stringify({
+        model: model || 'glm-4-air',
+        messages: messages.map(m => ({
+          role: m.role,
+          content: m.content
+        })),
+        max_tokens: 1024,
+        temperature: 0.7,
+        thinking: { type: 'disabled' },
+      }),
+      signal: AbortSignal.timeout(30000)
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      console.error(`[AI] Z.ai platform error: ${response.status} - ${error}`);
+      return null;
+    }
+
+    const data = await response.json();
+    
+    return {
+      content: data.choices?.[0]?.message?.content || '',
+      inputTokens: data.usage?.prompt_tokens || 0,
+      outputTokens: data.usage?.completion_tokens || 0
+    };
+  } catch (error) {
+    console.error('[AI] Z.ai platform call failed:', error);
+    return null;
+  }
+}
 
 /**
  * Get all enabled AI providers ordered by priority
@@ -162,10 +302,16 @@ export async function canAccountUseAI(accountId: string): Promise<{
 /**
  * Get the AI model to use based on the account's subscription plan
  * "basic" = cheaper/faster model, "premium" = better quality model
+ * 
+ * Model mapping:
+ * - Z.ai/Zhipu: basic=glm-4-air, premium=glm-4-plus
+ * - Groq: basic=llama-3.1-8b-instant, premium=llama-3.1-70b-versatile
  */
 export function getModelForPlan(aiModelType: string, providerName: string, defaultModel: string): string {
   if (providerName.toLowerCase() === 'zai') {
-    return aiModelType === 'premium' ? 'glm-4-plus' : 'glm-4-flash';
+    // glm-4-air is the affordable model, glm-4-plus is the premium model
+    // Note: glm-4-flash was deprecated/removed from the API, use glm-4-air instead
+    return aiModelType === 'premium' ? 'glm-4-plus' : 'glm-4-air';
   }
   if (providerName.toLowerCase() === 'groq') {
     return aiModelType === 'premium' ? 'llama-3.1-70b-versatile' : 'llama-3.1-8b-instant';
@@ -208,14 +354,47 @@ export async function trackTokenUsage(
 }
 
 /**
- * Call Zhipu AI (GLM-4) via public API
- * Endpoint: https://open.bigmodel.cn/api/paas/v4/chat/completions
+ * Call Zhipu AI (GLM-4) via the Z.ai platform SDK
+ * Falls back to direct API calls if SDK is unavailable
  */
 async function callZhipuAI(
   messages: ChatMessage[],
-  model: string = 'glm-4-plus'
+  model: string = 'glm-4-air'
 ): Promise<{ content: string; inputTokens: number; outputTokens: number }> {
-  console.log('[AI] Calling Zhipu AI (GLM-4) via public API');
+  // Method 1: Try Z.ai platform API (direct HTTP with X-Z-AI-From header)
+  const zaiResult = await callZaiPlatform(messages, model);
+  if (zaiResult) {
+    console.log('[AI] Z.ai platform call succeeded');
+    return zaiResult;
+  }
+  
+  // Method 2: Try ZAI SDK (requires .z-ai-config file)
+  try {
+    const client = await getZaiClient();
+    if (client) {
+      console.log('[AI] Calling via ZAI SDK');
+      const result = await client.chat.completions.create({
+        model,
+        messages: messages.map(m => ({
+          role: m.role,
+          content: m.content
+        })),
+        max_tokens: 1024,
+        temperature: 0.7,
+      });
+      
+      return {
+        content: result.choices?.[0]?.message?.content || '',
+        inputTokens: result.usage?.prompt_tokens || 0,
+        outputTokens: result.usage?.completion_tokens || 0
+      };
+    }
+  } catch (sdkError) {
+    console.log('[AI] ZAI SDK call failed, trying direct API:', sdkError);
+  }
+  
+  // Method 3: Direct Zhipu AI API call (fallback)
+  console.log('[AI] Calling Zhipu AI (GLM-4) via direct public API');
   
   // Get API key from environment or database
   let apiKey = ZHIPU_API_KEY;
@@ -230,7 +409,7 @@ async function callZhipuAI(
   }
   
   if (!apiKey) {
-    throw new Error('Zhipu AI API key not configured. Set ZHIPU_API_KEY environment variable.');
+    throw new Error('Zhipu AI API key not configured. Set ZAI_API_KEY or ZHIPU_API_KEY environment variable.');
   }
   
   const response = await fetch(`${ZHIPU_API_URL}/chat/completions`, {
@@ -266,10 +445,7 @@ async function callZhipuAI(
 }
 
 /**
- * Transcribe audio using Zhipu AI GLM-ASR with Groq Whisper fallback
- * 
- * For Zhipu AI ASR, we need to use the correct endpoint.
- * Documentation: https://docs.z.ai/guides/audio/glm-asr-2512
+ * Transcribe audio using Z.ai platform ASR with Groq Whisper fallback
  */
 export async function transcribeAudio(
   audioUrl: string
@@ -295,37 +471,82 @@ export async function transcribeAudio(
 }
 
 /**
- * Transcribe audio from base64 with Zhipu AI ASR and Groq Whisper fallback
+ * Transcribe audio from base64 with Z.ai ASR and Groq Whisper fallback
  */
 export async function transcribeAudioBase64(
   base64Audio: string,
   mimeType: string = 'audio/ogg'
 ): Promise<{ success: boolean; text?: string; error?: string; provider?: string }> {
   
-  // Try Zhipu AI ASR first (if API key is configured)
+  // Method 1: Try Z.ai platform ASR
+  const zaiBaseUrl = process.env.ZAI_BASE_URL;
+  const zaiApiKey = process.env.ZAI_API_KEY;
+  
+  if (zaiBaseUrl && zaiApiKey) {
+    try {
+      console.log('[AI] Transcribing audio with Z.ai platform ASR...');
+      
+      const response = await fetch(`${zaiBaseUrl}/audio/asr`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${zaiApiKey}`,
+          'Content-Type': 'application/json',
+          'X-Z-AI-From': 'Z',
+        },
+        body: JSON.stringify({
+          file_base64: base64Audio,
+          model: 'whisper-1',
+        }),
+        signal: AbortSignal.timeout(60000)
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        if (data.text) {
+          console.log('[AI] Audio transcribed successfully with Z.ai platform');
+          return { success: true, text: data.text, provider: 'Z.ai' };
+        }
+      } else {
+        console.log('[AI] Z.ai platform ASR failed, trying ZAI SDK...');
+      }
+    } catch (error: any) {
+      console.log('[AI] Z.ai platform ASR error:', error.message);
+    }
+  }
+  
+  // Method 2: Try ZAI SDK
   try {
-    console.log('[AI] Transcribing audio with Zhipu AI GLM-ASR...');
-    
-    let apiKey = ZHIPU_API_KEY;
-    if (!apiKey) {
-      const providers = await getEnabledProviders();
-      const zaiProvider = providers.find(p => p.name.toLowerCase() === 'zai');
-      if (zaiProvider?.apiKey) {
-        apiKey = zaiProvider.apiKey;
+    const client = await getZaiClient();
+    if (client) {
+      console.log('[AI] Transcribing audio with ZAI SDK ASR...');
+      const result = await client.audio.asr.create({
+        file_base64: base64Audio,
+        model: 'whisper-1'
+      });
+      
+      if (result?.text) {
+        console.log('[AI] Audio transcribed successfully with ZAI SDK');
+        return { success: true, text: result.text, provider: 'Z.ai SDK' };
       }
     }
-    
-    if (apiKey) {
-      // Zhipu AI ASR endpoint
+  } catch (error: any) {
+    console.log('[AI] ZAI SDK ASR error:', error.message, '- trying Groq Whisper fallback');
+  }
+  
+  // Method 3: Direct Zhipu AI ASR (if API key configured)
+  if (ZHIPU_API_KEY) {
+    try {
+      console.log('[AI] Transcribing audio with direct Zhipu AI ASR...');
+      
       const response = await fetch(`${ZHIPU_API_URL}/audio/asr`, {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${apiKey}`,
+          'Authorization': `Bearer ${ZHIPU_API_KEY}`,
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
           file_base64: base64Audio,
-          model: 'whisper-1' // or glm-asr if available
+          model: 'whisper-1'
         }),
         signal: AbortSignal.timeout(60000)
       });
@@ -336,15 +557,13 @@ export async function transcribeAudioBase64(
           console.log('[AI] Audio transcribed successfully with Zhipu AI');
           return { success: true, text: data.text, provider: 'Zhipu AI' };
         }
-      } else {
-        console.log('[AI] Zhipu AI ASR failed, trying fallback...');
       }
+    } catch (error: any) {
+      console.log('[AI] Zhipu AI ASR error:', error.message, '- trying Groq Whisper fallback');
     }
-  } catch (error: any) {
-    console.log('[AI] Zhipu AI ASR error:', error.message, '- trying Groq Whisper fallback');
   }
   
-  // Fallback to Groq Whisper
+  // Method 4: Fallback to Groq Whisper
   try {
     console.log('[AI] Transcribing audio with Groq Whisper...');
     
@@ -479,7 +698,7 @@ async function callOpenAICompatible(
 
 /**
  * Main function: Generate chat completion with fallback
- * Priority: Zhipu AI (ZAI) -> Groq -> OpenAI-compatible
+ * Priority: Z.ai Platform -> ZAI SDK -> Direct Zhipu AI -> Groq -> OpenAI-compatible
  * Also enforces subscription plan AI token limits and model type
  */
 export async function generateChatCompletion(
@@ -576,7 +795,7 @@ export async function checkProvidersHealth(): Promise<Record<string, { status: s
       const messages: ChatMessage[] = [{ role: 'user', content: 'ping' }];
       
       if (provider.name.toLowerCase() === 'zai') {
-        await callZhipuAI(messages, (!provider.model || provider.model === 'default') ? 'glm-4-plus' : provider.model);
+        await callZhipuAI(messages, (!provider.model || provider.model === 'default') ? 'glm-4-air' : provider.model);
       } else if (provider.name.toLowerCase() === 'groq') {
         await callGroq(provider, messages);
       } else {
@@ -609,5 +828,3 @@ export async function checkProvidersHealth(): Promise<Record<string, { status: s
 
   return results;
 }
-
-// Deploy triggered: 2026-04-19T01:34:18+00:00
