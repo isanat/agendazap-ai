@@ -149,7 +149,8 @@ async function callZaiPlatform(
     return null;
   }
   
-  console.log('[AI] Calling Z.ai platform API');
+  const modelToUse = model || 'glm-4-air';
+  console.log(`[AI] Calling Z.ai platform API with model: ${modelToUse}`);
   
   try {
     const response = await fetch(`${baseUrl}/chat/completions`, {
@@ -160,7 +161,7 @@ async function callZaiPlatform(
         'X-Z-AI-From': 'Z',
       },
       body: JSON.stringify({
-        model: model || 'glm-4-air',
+        model: modelToUse,
         messages: messages.map(m => ({
           role: m.role,
           content: m.content
@@ -169,12 +170,14 @@ async function callZaiPlatform(
         temperature: 0.7,
         thinking: { type: 'disabled' },
       }),
-      signal: AbortSignal.timeout(30000)
+      signal: AbortSignal.timeout(15000) // 15s per model attempt (Vercel serverless friendly)
     });
 
     if (!response.ok) {
       const error = await response.text();
-      console.error(`[AI] Z.ai platform error: ${response.status} - ${error}`);
+      const errorShort = error.substring(0, 200);
+      console.error(`[AI] Z.ai platform error: ${response.status} - ${errorShort}`);
+      // Return null to trigger model fallback (don't throw)
       return null;
     }
 
@@ -185,8 +188,12 @@ async function callZaiPlatform(
       inputTokens: data.usage?.prompt_tokens || 0,
       outputTokens: data.usage?.completion_tokens || 0
     };
-  } catch (error) {
-    console.error('[AI] Z.ai platform call failed:', error);
+  } catch (error: any) {
+    if (error?.name === 'TimeoutError' || String(error).includes('abort')) {
+      console.log(`[AI] Z.ai platform timeout for model ${modelToUse} (15s limit)`);
+    } else {
+      console.error(`[AI] Z.ai platform call failed for model ${modelToUse}:`, error?.message || error);
+    }
     return null;
   }
 }
@@ -355,63 +362,53 @@ export async function trackTokenUsage(
 
 /**
  * Call Zhipu AI (GLM-4) with automatic model fallback
- * Tries models in order: requested model -> glm-4-plus -> glm-4 -> glm-4-air
- * Falls back through: Z.ai platform -> ZAI SDK -> Direct Zhipu AI API
+ * Optimized for Vercel serverless: limited fallback chain with fast timeouts
+ * 
+ * Strategy:
+ * 1. Try Z.ai platform API with 2 model fallbacks (fastest, 15s timeout each)
+ * 2. If platform fails, try direct Zhipu AI API with 2 model fallbacks (10s timeout each)
+ * 3. Total worst case: ~4 attempts × ~15s = ~60s (but Vercel max is 30s so we need to be fast)
+ * 
+ * Skip ZAI SDK method entirely - it doesn't work on Vercel (read-only filesystem)
  */
 async function callZhipuAI(
   messages: ChatMessage[],
   model: string = 'glm-4-air'
 ): Promise<{ content: string; inputTokens: number; outputTokens: number }> {
-  // Models to try in order if the requested one fails with "model not found"
-  const modelFallbacks = [model, 'glm-4-plus', 'glm-4', 'glm-4-air', 'glm-4-flashx'];
+  // Only try 2-3 models max to stay within Vercel's 30s function timeout
+  // glm-4-air is the most reliable/available model on Zhipu AI
+  const modelFallbacks = [model, 'glm-4-air', 'glm-4-flash'];
+  
+  console.log(`[AI] callZhipuAI: Starting with requested model: ${model}, fallbacks: ${modelFallbacks.join(', ')}`);
+  const startTime = Date.now();
   
   // Method 1: Try Z.ai platform API (direct HTTP with X-Z-AI-From header)
+  // This is the primary method and should work if env vars are set
   for (const tryModel of modelFallbacks) {
+    const elapsed = Date.now() - startTime;
+    if (elapsed > 20000) {
+      // If we've already spent 20s, skip remaining model attempts to leave time for Groq fallback
+      console.log(`[AI] Skipping remaining Z.ai platform attempts (elapsed: ${elapsed}ms > 20s budget)`);
+      break;
+    }
+    
     const zaiResult = await callZaiPlatform(messages, tryModel);
     if (zaiResult) {
-      console.log(`[AI] Z.ai platform call succeeded with model: ${tryModel}`);
+      console.log(`[AI] Z.ai platform call succeeded with model: ${tryModel} (${Date.now() - startTime}ms total)`);
       return zaiResult;
     }
+    console.log(`[AI] Z.ai platform model ${tryModel} failed, trying next...`);
   }
   
-  // Method 2: Try ZAI SDK (requires .z-ai-config file)
-  try {
-    const client = await getZaiClient();
-    if (client) {
-      for (const tryModel of modelFallbacks) {
-        try {
-          console.log(`[AI] Calling via ZAI SDK with model: ${tryModel}`);
-          const result = await client.chat.completions.create({
-            model: tryModel,
-            messages: messages.map(m => ({
-              role: m.role,
-              content: m.content
-            })),
-            max_tokens: 1024,
-            temperature: 0.7,
-          });
-          
-          return {
-            content: result.choices?.[0]?.message?.content || '',
-            inputTokens: result.usage?.prompt_tokens || 0,
-            outputTokens: result.usage?.completion_tokens || 0
-          };
-        } catch (sdkModelErr: any) {
-          // If model not found, try next model
-          if (String(sdkModelErr).includes('1211') || String(sdkModelErr).includes('model')) {
-            console.log(`[AI] Model ${tryModel} not available via SDK, trying next...`);
-            continue;
-          }
-          throw sdkModelErr;
-        }
-      }
-    }
-  } catch (sdkError) {
-    console.log('[AI] ZAI SDK call failed, trying direct API:', sdkError);
+  // Method 2: Direct Zhipu AI API call with model fallback
+  // Skip ZAI SDK (doesn't work on Vercel due to read-only filesystem)
+  const elapsedAfterPlatform = Date.now() - startTime;
+  if (elapsedAfterPlatform > 20000) {
+    console.log(`[AI] Skipping direct Zhipu API (elapsed: ${elapsedAfterPlatform}ms > 20s budget), will fall through to Groq`);
+    throw new Error(`Z.ai platform failed after ${elapsedAfterPlatform}ms, no time for direct API fallback`);
   }
   
-  // Method 3: Direct Zhipu AI API call with model fallback
-  console.log('[AI] Calling Zhipu AI (GLM-4) via direct public API');
+  console.log('[AI] Z.ai platform failed, trying direct Zhipu AI API');
   
   // Get API key from environment or database
   let apiKey = ZHIPU_API_KEY;
@@ -426,14 +423,22 @@ async function callZhipuAI(
   }
   
   if (!apiKey) {
-    throw new Error('Zhipu AI API key not configured. Set ZAI_API_KEY or ZHIPU_API_KEY environment variable.');
+    console.log('[AI] No Zhipu API key available, skipping direct API call');
+    throw new Error('Zhipu AI API key not configured and Z.ai platform unavailable');
   }
   
-  let lastApiError: Error | null = null;
+  // Only try 2 models via direct API (to stay within time budget)
+  const directApiModels = model === 'glm-4-air' ? ['glm-4-air'] : [model, 'glm-4-air'];
   
-  for (const tryModel of modelFallbacks) {
+  for (const tryModel of directApiModels) {
+    const elapsed = Date.now() - startTime;
+    if (elapsed > 25000) {
+      console.log(`[AI] Skipping direct API attempt for ${tryModel} (elapsed: ${elapsed}ms > 25s budget)`);
+      break;
+    }
+    
     try {
-      console.log(`[AI] Trying Zhipu AI model: ${tryModel}`);
+      console.log(`[AI] Trying direct Zhipu AI model: ${tryModel}`);
       
       const response = await fetch(`${ZHIPU_API_URL}/chat/completions`, {
         method: 'POST',
@@ -450,37 +455,40 @@ async function callZhipuAI(
           max_tokens: 1024,
           temperature: 0.7
         }),
-        signal: AbortSignal.timeout(30000)
+        signal: AbortSignal.timeout(10000) // 10s timeout for direct API (faster fail)
       });
 
       if (!response.ok) {
         const errorText = await response.text();
+        const errorShort = errorText.substring(0, 200);
         // If model not found (error 1211), try next model
         if (errorText.includes('"1211"') || errorText.includes('模型不存在')) {
-          console.log(`[AI] Model ${tryModel} not found, trying next fallback...`);
-          lastApiError = new Error(`Zhipu AI error: ${response.status} - ${errorText}`);
+          console.log(`[AI] Direct Zhipu model ${tryModel} not found (1211), trying next...`);
           continue;
         }
-        throw new Error(`Zhipu AI error: ${response.status} - ${errorText}`);
+        console.error(`[AI] Direct Zhipu API error: ${response.status} - ${errorShort}`);
+        continue; // Don't throw, try next model or fall through to Groq
       }
 
       const data = await response.json();
-      console.log(`[AI] Zhipu AI succeeded with model: ${tryModel}`);
+      console.log(`[AI] Direct Zhipu AI succeeded with model: ${tryModel} (${Date.now() - startTime}ms total)`);
       
       return {
         content: data.choices[0]?.message?.content || '',
         inputTokens: data.usage?.prompt_tokens || 0,
         outputTokens: data.usage?.completion_tokens || 0
       };
-    } catch (err) {
-      lastApiError = err instanceof Error ? err : new Error(String(err));
-      if (!String(lastApiError).includes('1211') && !String(lastApiError).includes('模型不存在')) {
-        throw lastApiError;
+    } catch (err: any) {
+      if (err?.name === 'TimeoutError' || String(err).includes('abort')) {
+        console.log(`[AI] Direct Zhipu API timeout for model ${tryModel}`);
+        continue;
       }
+      console.error(`[AI] Direct Zhipu API error for model ${tryModel}:`, err?.message || err);
+      continue; // Don't throw, let it fall through to Groq
     }
   }
   
-  throw lastApiError || new Error('All Zhipu AI model attempts failed');
+  throw new Error(`All Zhipu AI attempts failed after ${Date.now() - startTime}ms`);
 }
 
 /**
@@ -663,6 +671,9 @@ async function callGroq(
   messages: ChatMessage[],
   modelOverride?: string
 ): Promise<{ content: string; inputTokens: number; outputTokens: number }> {
+  const modelToUse = modelOverride || config.model || 'llama-3.1-8b-instant';
+  console.log(`[AI] Calling Groq with model: ${modelToUse}`);
+  
   const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -670,7 +681,7 @@ async function callGroq(
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({
-      model: modelOverride || config.model || 'llama-3.1-8b-instant',
+      model: modelToUse,
       messages: messages.map(m => ({
         role: m.role === 'system' ? 'system' : m.role,
         content: m.content
@@ -678,7 +689,7 @@ async function callGroq(
       max_tokens: config.maxTokensPerRequest || 1024,
       temperature: 0.7
     }),
-    signal: AbortSignal.timeout(config.timeoutMs || 30000)
+    signal: AbortSignal.timeout(Math.min(config.timeoutMs || 15000, 15000)) // Max 15s for Vercel
   });
 
   if (!response.ok) {
@@ -703,6 +714,8 @@ async function callOpenAICompatible(
   modelOverride?: string
 ): Promise<{ content: string; inputTokens: number; outputTokens: number }> {
   const baseUrl = config.baseUrl || 'https://api.openai.com/v1';
+  const modelToUse = modelOverride || config.model || 'gpt-4o-mini';
+  console.log(`[AI] Calling OpenAI-compatible API with model: ${modelToUse}`);
   
   const response = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
@@ -711,7 +724,7 @@ async function callOpenAICompatible(
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({
-      model: modelOverride || config.model || 'gpt-4o-mini',
+      model: modelToUse,
       messages: messages.map(m => ({
         role: m.role,
         content: m.content
@@ -719,7 +732,7 @@ async function callOpenAICompatible(
       max_tokens: config.maxTokensPerRequest || 1024,
       temperature: 0.7
     }),
-    signal: AbortSignal.timeout(config.timeoutMs || 30000)
+    signal: AbortSignal.timeout(Math.min(config.timeoutMs || 15000, 15000)) // Max 15s for Vercel
   });
 
   if (!response.ok) {
@@ -745,13 +758,17 @@ export async function generateChatCompletion(
   messages: ChatMessage[],
   options?: { skipTracking?: boolean; requestType?: string; metadata?: Record<string, unknown> }
 ): Promise<ChatCompletionResult> {
+  const startTime = Date.now();
+  
   const canUse = await canAccountUseAI(accountId);
   if (!canUse.allowed) {
+    console.log(`[AI] Account ${accountId} not allowed: ${canUse.reason}`);
     return { success: false, error: canUse.reason };
   }
 
   const providers = await getEnabledProviders();
   if (providers.length === 0) {
+    console.error('[AI] No AI providers configured in database!');
     return { success: false, error: 'No AI providers configured' };
   }
 
@@ -759,7 +776,16 @@ export async function generateChatCompletion(
   let lastError: Error | null = null;
   let fallbackUsed = false;
 
+  console.log(`[AI] generateChatCompletion: ${providers.length} providers available, plan model type: ${aiModelType}`);
+
   for (const provider of providers) {
+    const elapsed = Date.now() - startTime;
+    if (elapsed > 25000) {
+      // Don't start new provider attempts if we're close to Vercel's 30s limit
+      console.log(`[AI] Skipping provider ${provider.displayName} (elapsed: ${elapsed}ms > 25s budget)`);
+      break;
+    }
+    
     try {
       console.log(`[AI] Trying provider: ${provider.displayName} (priority: ${provider.priority}, plan model: ${aiModelType})`);
 
@@ -792,7 +818,8 @@ export async function generateChatCompletion(
         );
       }
 
-      console.log(`[AI] Success with provider: ${provider.displayName}, model: ${planModel}`);
+      const totalTime = Date.now() - startTime;
+      console.log(`[AI] ✅ Success with provider: ${provider.displayName}, model: ${planModel} (${totalTime}ms total, ${result.inputTokens + result.outputTokens} tokens)`);
 
       return {
         success: true,
@@ -806,13 +833,17 @@ export async function generateChatCompletion(
       };
 
     } catch (error) {
-      console.error(`[AI] Provider ${provider.displayName} failed:`, error);
+      const elapsed = Date.now() - startTime;
+      console.error(`[AI] ❌ Provider ${provider.displayName} failed after ${elapsed}ms:`, error instanceof Error ? error.message : error);
       lastError = error instanceof Error ? error : new Error(String(error));
       fallbackUsed = true;
       continue;
     }
   }
 
+  const totalTime = Date.now() - startTime;
+  console.error(`[AI] ❌ All providers failed after ${totalTime}ms. Last error: ${lastError?.message}`);
+  
   return {
     success: false,
     error: lastError?.message || 'All AI providers failed',

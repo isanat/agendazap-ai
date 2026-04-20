@@ -644,12 +644,16 @@ async function processMessageWithAI(
   clientId: string,
   instanceName?: string
 ): Promise<void> {
+  const processStart = Date.now();
   try {
     const integration = await db.integration.findUnique({
       where: { accountId_type: { accountId, type: 'whatsapp' } }
     });
 
-    if (!integration) return;
+    if (!integration) {
+      console.log(`[Webhook] No WhatsApp integration found for account ${accountId}`);
+      return;
+    }
 
     const config = typeof integration.config === 'string'
       ? JSON.parse(integration.config || '{}')
@@ -679,9 +683,13 @@ async function processMessageWithAI(
     }
 
     // Generate AI response with full context
+    console.log(`[Webhook] 🤖 Generating AI response for phone: ${phoneForContext}...`);
     const response = await generateAIResponse(accountId, phoneForContext, message);
 
     if (response) {
+      const aiTime = Date.now() - processStart;
+      console.log(`[Webhook] 🤖 AI response generated in ${aiTime}ms: "${response.substring(0, 80)}..."`);
+      
       const savedMessage = await db.whatsappMessage.create({
         data: {
           accountId,
@@ -693,19 +701,27 @@ async function processMessageWithAI(
           metadata: { 
             autoReply: true,
             originalIdentifier: isLidIdentifier(phone) ? phone : undefined,
+            processingTimeMs: aiTime,
           }
         }
       });
 
       // Only try to send if we have a real phone number
       if (!isLidIdentifier(phoneForSending)) {
+        console.log(`[Webhook] 📤 Sending WhatsApp message to ${phoneForSending}...`);
         const sendResult = await sendWhatsAppMessage(accountId, phoneForSending, response);
+
+        if (sendResult.success) {
+          console.log(`[Webhook] ✅ Message sent successfully to ${phoneForSending}`);
+        } else {
+          console.error(`[Webhook] ❌ Failed to send message to ${phoneForSending}: ${sendResult.error}`);
+        }
 
         await db.whatsappMessage.update({
           where: { id: savedMessage.id },
           data: { 
             status: sendResult.success ? 'sent' : 'failed',
-            metadata: { autoReply: true, error: sendResult.error }
+            metadata: { autoReply: true, error: sendResult.error, processingTimeMs: aiTime }
           }
         });
       } else {
@@ -718,14 +734,18 @@ async function processMessageWithAI(
               autoReply: true, 
               error: 'Cannot send to LID identifier - phone number not resolvable',
               originalIdentifier: phone,
+              processingTimeMs: aiTime,
             }
           }
         });
         console.warn(`[Webhook] ⚠️ AI response saved but NOT sent - could not resolve LID to phone: ${phone}`);
       }
+    } else {
+      console.error(`[Webhook] ❌ AI response was null for message from ${phoneForContext}`);
     }
   } catch (error) {
-    console.error('[Webhook] Error processing AI response:', error);
+    const elapsed = Date.now() - processStart;
+    console.error(`[Webhook] ❌ Error processing AI response after ${elapsed}ms:`, error);
   }
 }
 
@@ -740,15 +760,18 @@ async function generateAIResponse(
   try {
     const canUse = await canAccountUseAI(accountId);
     if (!canUse.allowed) {
-      console.log(`[Webhook] AI not available: ${canUse.reason}`);
-      return null;
+      console.log(`[Webhook] AI not available for account ${accountId}: ${canUse.reason}`);
+      return getFallbackResponse(accountId, message);
     }
 
     // Generate system prompt with full salon and client context
+    console.log('[Webhook] Generating system prompt...');
     const systemPrompt = await generateSystemPrompt(accountId, phone);
+    console.log(`[Webhook] System prompt generated (${systemPrompt.length} chars)`);
     
     // Get conversation history from database (more reliable than in-memory)
     const history = await getConversationHistory(accountId, phone, 10);
+    console.log(`[Webhook] Conversation history: ${history.length} messages`);
 
     const messages: ChatMessage[] = [
       { role: 'system', content: systemPrompt },
@@ -756,18 +779,19 @@ async function generateAIResponse(
       { role: 'user', content: message }
     ];
 
+    console.log(`[Webhook] Sending ${messages.length} messages to AI (system prompt + ${history.length - 1} history + 1 user message)`);
     const result = await generateChatCompletion(accountId, messages);
 
     if (!result.success) {
-      console.error(`[Webhook] AI generation failed: ${result.error}`);
+      console.error(`[Webhook] ❌ AI generation failed: ${result.error}`);
       return getFallbackResponse(accountId, message);
     }
 
-    console.log(`[Webhook] AI response via ${result.provider} (${result.totalTokens} tokens)`);
-    return result.content || null;
+    console.log(`[Webhook] ✅ AI response via ${result.provider} (${result.totalTokens} tokens, fallback: ${result.fallbackUsed})`);
+    return result.content || getFallbackResponse(accountId, message);
 
   } catch (error) {
-    console.error('[Webhook] Error generating AI response:', error);
+    console.error('[Webhook] ❌ Error generating AI response:', error);
     return getFallbackResponse(accountId, message);
   }
 }
