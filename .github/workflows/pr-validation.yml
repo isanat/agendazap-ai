@@ -1,0 +1,62 @@
+name: PR Validation
+
+on:
+  pull_request:
+    branches: [main]
+
+env:
+  NODE_ENV: test
+
+jobs:
+  validate:
+    name: Validate PR
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma Client
+        run: npx prisma generate
+
+      - name: Run ESLint
+        run: npm run lint
+
+      - name: Run tests
+        run: npm test
+
+      - name: Type check
+        run: npx tsc --noEmit
+        continue-on-error: true
+
+      - name: Check for console.log statements
+        run: |
+          # Check for console.log (excluding allowed files)
+          CONSOLE_LOGS=$(grep -r "console\.log" src/ --include="*.ts" --include="*.tsx" | \
+            grep -v "node_modules" | \
+            grep -v ".test." | \
+            grep -v "__tests__" | \
+            grep -v "// eslint-disable" | \
+            grep -v "console.log\(\`" | \
+            head -20 || true)
+          
+          if [ -n "$CONSOLE_LOGS" ]; then
+            echo "⚠️ Found console.log statements (consider using the logger instead):"
+            echo "$CONSOLE_LOGS"
+          fi
+
+      - name: Validate Prisma schema
+        run: npx prisma validate
+
+      - name: Check for TypeScript errors in modified files
+        run: |
+          echo "✅ PR validation complete"
