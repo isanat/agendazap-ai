@@ -536,62 +536,74 @@ async function processIncomingMessage(
   }
   
   // If we got a LID identifier, try to resolve it to a real phone number
+  // NOTE: We need accountId for database lookups, so we find it first
   if (phone && isLidIdentifier(phone)) {
     console.log(`[Webhook] LID detected, attempting phone resolution for: ${phone}`);
+    
+    // Find the account ID first (needed for database lookups)
+    const lidAccountId = await findAccountByInstance(instanceName);
     
     // Method 0: Check if we already have a phone number for this LID in our database
     // Look for a client with this LID as phone who also has a different (non-LID) phone
     const lidValue = phone.replace('lid:', '');
-    const existingClientWithLid = await db.client.findFirst({
-      where: {
-        accountId,
-        phone: { contains: lidValue }
+    if (lidAccountId) {
+      const existingClientWithLid = await db.client.findFirst({
+        where: {
+          accountId: lidAccountId,
+          phone: { contains: lidValue }
+        }
+      });
+      
+      // If the client has a non-LID phone number (from previous interactions), use that
+      if (existingClientWithLid && !existingClientWithLid.phone.startsWith('lid:')) {
+        phone = existingClientWithLid.phone;
+        console.log(`[Webhook] LID resolved via database to existing phone: ${phone}`);
+      } else {
+        // Try Evolution API resolution
+        const resolvedPhone = await resolveLidToPhone(instanceName, phone);
+        if (resolvedPhone) {
+          phone = resolvedPhone;
+          console.log(`[Webhook] LID resolved successfully to: ${phone}`);
+          
+          // Update the client's phone in the database for future reference
+          if (existingClientWithLid) {
+            await db.client.update({
+              where: { id: existingClientWithLid.id },
+              data: { phone: resolvedPhone }
+            });
+            console.log(`[Webhook] Client phone updated from LID to resolved phone: ${resolvedPhone}`);
+          }
+        } else {
+          // Try to find the client by matching WhatsApp push name
+          // This works if the same person previously contacted us with a regular phone number
+          const pushName = data.pushName;
+          if (pushName) {
+            // Find client by push name - filter for non-LID phone in code
+            const clientsByName = await db.client.findMany({
+              where: {
+                accountId: lidAccountId,
+                whatsappPushName: pushName,
+              }
+            });
+            const clientByName = clientsByName.find(c => !c.phone.startsWith('lid:'));
+            
+            if (clientByName && !clientByName.phone.startsWith('lid:')) {
+              phone = clientByName.phone;
+              console.log(`[Webhook] LID resolved via push name match to: ${phone}`);
+            } else {
+              console.warn(`[Webhook] ⚠️ Could not resolve LID to phone number. JID: ${data.key?.remoteJid}, pushName: ${pushName || 'N/A'}`);
+            }
+          } else {
+            console.warn(`[Webhook] ⚠️ Could not resolve LID to phone number. No pushName available.`);
+          }
+        }
       }
-    });
-    
-    // If the client has a non-LID phone number (from previous interactions), use that
-    if (existingClientWithLid && !existingClientWithLid.phone.startsWith('lid:')) {
-      phone = existingClientWithLid.phone;
-      console.log(`[Webhook] LID resolved via database to existing phone: ${phone}`);
     } else {
-      // Try Evolution API resolution
+      // No account found yet, try Evolution API resolution without database lookup
       const resolvedPhone = await resolveLidToPhone(instanceName, phone);
       if (resolvedPhone) {
         phone = resolvedPhone;
-        console.log(`[Webhook] LID resolved successfully to: ${phone}`);
-        
-        // Update the client's phone in the database for future reference
-        if (existingClientWithLid) {
-          await db.client.update({
-            where: { id: existingClientWithLid.id },
-            data: { phone: resolvedPhone }
-          });
-          console.log(`[Webhook] Client phone updated from LID to resolved phone: ${resolvedPhone}`);
-        }
-      } else {
-        // Try to find the client by matching WhatsApp push name
-        // This works if the same person previously contacted us with a regular phone number
-        const pushName = data.pushName;
-        if (pushName) {
-          // Find client by push name - filter for non-LID phone in code
-          const clientsByName = await db.client.findMany({
-            where: {
-              accountId,
-              whatsappPushName: pushName,
-            }
-          });
-          const clientByName = clientsByName.find(c => !c.phone.startsWith('lid:'));
-          
-          if (clientByName && !clientByName.phone.startsWith('lid:')) {
-            phone = clientByName.phone;
-            console.log(`[Webhook] LID resolved via push name match to: ${phone}`);
-          } else {
-            console.warn(`[Webhook] ⚠️ Could not resolve LID to phone number. JID: ${data.key?.remoteJid}, pushName: ${pushName || 'N/A'}`);
-            console.warn(`[Webhook] ⚠️ Message from this contact will be processed with LID session. Reply may fail.`);
-          }
-        } else {
-          console.warn(`[Webhook] ⚠️ Could not resolve LID to phone number. No pushName available.`);
-        }
+        console.log(`[Webhook] LID resolved via Evolution API to: ${phone}`);
       }
     }
   }
