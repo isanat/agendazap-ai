@@ -25,6 +25,7 @@ model Account {
   addressZipCode         String?
   addressComplement      String?
   googleMapsUrl          String?
+  googleMapsEmbed        String?
   openingTime            String               @default("09:00")
   closingTime            String               @default("18:00")
   workingDays            String               @default("1,2,3,4,5")
@@ -48,6 +49,7 @@ model Account {
   User                   User                 @relation(fields: [ownerId], references: [id], onDelete: Cascade)
   AccountSubscription    AccountSubscription?
   Appointment            Appointment[]
+  BlockedSlot            BlockedSlot[]
   Client                 Client[]
   ClientPackage          ClientPackage[]
   Holiday                Holiday[]
@@ -56,23 +58,25 @@ model Account {
   LoyaltyTransaction     LoyaltyTransaction[]
   Package                Package[]
   Professional           Professional[]
+  Report                 Report[]
   Service                Service[]
   WhatsappMessage        WhatsappMessage[]
 }
 
 model AccountSubscription {
-  id                 String           @id @default(cuid())
-  accountId          String           @unique
-  planId             String
-  status             String           @default("active")
-  billingCycle       String           @default("monthly")
-  currentPeriodStart DateTime
-  currentPeriodEnd   DateTime
-  canceledAt         DateTime?
-  createdAt          DateTime         @default(now())
-  updatedAt          DateTime         @updatedAt
-  Account            Account          @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  SubscriptionPlan   SubscriptionPlan @relation(fields: [planId], references: [id])
+  id                        String           @id @default(cuid())
+  accountId                 String           @unique
+  planId                    String
+  status                    String           @default("active")
+  billingCycle              String           @default("monthly")
+  currentPeriodStart        DateTime
+  currentPeriodEnd          DateTime
+  canceledAt                DateTime?
+  mercadoPagoSubscriptionId String?
+  createdAt                 DateTime         @default(now())
+  updatedAt                 DateTime         @updatedAt
+  Account                   Account          @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  SubscriptionPlan          SubscriptionPlan @relation(fields: [planId], references: [id])
 
   @@index([accountId])
   @@index([status])
@@ -94,6 +98,10 @@ model Appointment {
   reminder24hSent    Boolean      @default(false)
   reminder2hSent     Boolean      @default(false)
   notes              String?
+  pixQrCode          String?
+  pixDeepLink        String?
+  pixExpiresAt       DateTime?
+  pixPaid            Boolean      @default(false)
   createdAt          DateTime     @default(now())
   updatedAt          DateTime     @updatedAt
   Account            Account      @relation(fields: [accountId], references: [id], onDelete: Cascade)
@@ -119,6 +127,23 @@ model AuditLog {
   User          User?        @relation(fields: [userId], references: [id])
 }
 
+model BlockedSlot {
+  id             String   @id @default(cuid())
+  accountId      String
+  professionalId String?
+  startDate      DateTime
+  endDate        DateTime
+  reason         String   @default("unavailable")
+  description    String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  Account        Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  Professional   Professional? @relation(fields: [professionalId], references: [id], onDelete: Cascade)
+
+  @@index([accountId, startDate])
+  @@index([professionalId, startDate])
+}
+
 model Client {
   id                String               @id @default(cuid())
   accountId         String
@@ -142,6 +167,7 @@ model Client {
   Account           Account              @relation(fields: [accountId], references: [id], onDelete: Cascade)
   ClientPackage     ClientPackage[]
   LoyaltyTransaction LoyaltyTransaction[]
+  User              User?
 
   @@unique([accountId, phone])
   @@index([accountId])
@@ -245,19 +271,24 @@ model NoShowFee {
   amount        Float
   paid          Boolean     @default(false)
   paidAt        DateTime?
+  pixQrCode     String?
+  pixDeepLink   String?
+  pixId         String?
+  reminderSent  Boolean     @default(false)
   createdAt     DateTime    @default(now())
   updatedAt     DateTime    @updatedAt
   Appointment   Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
 }
 
 model OAuthState {
-  id          String   @id @default(cuid())
-  accountId   String
-  provider    String
-  state       String   @unique
-  redirectUri String
-  createdAt   DateTime @default(now())
-  expiresAt   DateTime
+  id            String   @id @default(cuid())
+  accountId     String
+  provider      String
+  state         String   @unique
+  redirectUri   String
+  codeVerifier  String?
+  createdAt     DateTime @default(now())
+  expiresAt     DateTime
 
   @@index([accountId, provider])
 }
@@ -317,13 +348,32 @@ model Professional {
   openingTime         String?
   closingTime         String?
   isActive            Boolean               @default(true)
+  userId              String?               @unique
   createdAt           DateTime              @default(now())
   updatedAt           DateTime              @updatedAt
   Appointment         Appointment[]
+  BlockedSlot         BlockedSlot[]
   Account             Account               @relation(fields: [accountId], references: [id], onDelete: Cascade)
   ServiceProfessional ServiceProfessional[]
+  User                User?                 @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@index([accountId])
+  @@index([userId])
+}
+
+model Report {
+  id          String   @id @default(cuid())
+  accountId   String
+  type        String
+  title       String
+  data        Json
+  periodStart DateTime
+  periodEnd   DateTime
+  createdAt   DateTime @default(now())
+  Account     Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([accountId])
+  @@index([accountId, type])
 }
 
 model Service {
@@ -349,6 +399,7 @@ model ServiceProfessional {
   id             String       @id @default(cuid())
   serviceId      String
   professionalId String
+  customPrice    Float?
   Professional   Professional @relation(fields: [professionalId], references: [id], onDelete: Cascade)
   Service        Service      @relation(fields: [serviceId], references: [id], onDelete: Cascade)
 
@@ -366,6 +417,8 @@ model SubscriptionPlan {
   maxServices            Int                   @default(10)
   maxAppointmentsMonth   Int                   @default(100)
   maxClients             Int                   @default(500)
+  maxAiTokensMonth       Int                   @default(100000)
+  aiModelType            String                @default("basic")
   includeWhatsApp        Boolean               @default(true)
   includeAiAssistant     Boolean               @default(false)
   includeMercadoPago     Boolean               @default(true)
@@ -442,6 +495,8 @@ model AITokenUsage {
   outputTokens Int       @default(0)
   totalTokens Int        @default(0)
   costUsd     Float      @default(0)
+  requestType String?
+  metadata    Json?
   createdAt   DateTime   @default(now())
   periodStart DateTime
   periodEnd   DateTime
@@ -458,12 +513,16 @@ model User {
   password     String
   name         String
   phone        String?
+  avatar       String?
   role         String         @default("owner")
   isActive     Boolean        @default(true)
+  clientId     String?        @unique
   createdAt    DateTime       @default(now())
   updatedAt    DateTime       @updatedAt
   Account      Account?
   AuditLog     AuditLog[]
+  Client       Client?        @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  Professional Professional?
   RefreshToken RefreshToken[]
 }
 
@@ -501,6 +560,7 @@ model WhatsappMessage {
   appointmentId String?
   intent        String?
   status        String   @default("sent")
+  metadata      Json?
   createdAt     DateTime @default(now())
   Account       Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
 

@@ -86,9 +86,15 @@ async function getGroqProvider(): Promise<AIProviderConfig | null> {
 }
 
 /**
- * Check if account can use AI
+ * Check if account can use AI, including monthly token limit enforcement
  */
-export async function canAccountUseAI(accountId: string): Promise<{ allowed: boolean; reason?: string }> {
+export async function canAccountUseAI(accountId: string): Promise<{ 
+  allowed: boolean; 
+  reason?: string;
+  tokensUsed?: number;
+  tokensLimit?: number;
+  aiModelType?: string;
+}> {
   const account = await db.account.findUnique({
     where: { id: accountId },
     include: {
@@ -102,7 +108,70 @@ export async function canAccountUseAI(accountId: string): Promise<{ allowed: boo
     return { allowed: false, reason: 'AI assistant not included in your plan' };
   }
 
-  return { allowed: true };
+  const plan = account.AccountSubscription.SubscriptionPlan;
+
+  // Check monthly token limit
+  if (plan.maxAiTokensMonth > 0) {
+    const now = new Date();
+    const periodStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const periodEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+
+    const usage = await db.aITokenUsage.aggregate({
+      where: {
+        accountId,
+        createdAt: {
+          gte: periodStart,
+          lte: periodEnd,
+        }
+      },
+      _sum: {
+        totalTokens: true,
+      }
+    });
+
+    const tokensUsed = usage._sum.totalTokens || 0;
+    const tokensLimit = plan.maxAiTokensMonth;
+
+    if (tokensUsed >= tokensLimit) {
+      return { 
+        allowed: false, 
+        reason: `Limite mensal de tokens AI atingido (${tokensUsed.toLocaleString()}/${tokensLimit.toLocaleString()}). Considere fazer upgrade do seu plano.`,
+        tokensUsed,
+        tokensLimit,
+        aiModelType: plan.aiModelType || 'basic'
+      };
+    }
+
+    return { 
+      allowed: true, 
+      tokensUsed, 
+      tokensLimit,
+      aiModelType: plan.aiModelType || 'basic'
+    };
+  }
+
+  // Unlimited tokens (maxAiTokensMonth = 0 means unlimited)
+  return { 
+    allowed: true, 
+    tokensUsed: 0, 
+    tokensLimit: 0,
+    aiModelType: plan.aiModelType || 'basic'
+  };
+}
+
+/**
+ * Get the AI model to use based on the account's subscription plan
+ * "basic" = cheaper/faster model, "premium" = better quality model
+ */
+export function getModelForPlan(aiModelType: string, providerName: string, defaultModel: string): string {
+  if (providerName.toLowerCase() === 'zai') {
+    return aiModelType === 'premium' ? 'glm-4-plus' : 'glm-4-flash';
+  }
+  if (providerName.toLowerCase() === 'groq') {
+    return aiModelType === 'premium' ? 'llama-3.1-70b-versatile' : 'llama-3.1-8b-instant';
+  }
+  // For other providers, use their default model
+  return defaultModel;
 }
 
 /**
@@ -113,7 +182,9 @@ export async function trackTokenUsage(
   providerId: string,
   inputTokens: number,
   outputTokens: number,
-  costUsd: number
+  costUsd: number,
+  requestType?: string,
+  metadata?: Record<string, unknown>
 ): Promise<void> {
   const now = new Date();
   const periodStart = new Date(now.getFullYear(), now.getMonth(), 1);
@@ -128,6 +199,8 @@ export async function trackTokenUsage(
       outputTokens,
       totalTokens: inputTokens + outputTokens,
       costUsd,
+      requestType: requestType || 'chat',
+      metadata: metadata || undefined,
       periodStart,
       periodEnd
     }
@@ -329,7 +402,8 @@ export async function transcribeAudioBase64(
  */
 async function callGroq(
   config: AIProviderConfig,
-  messages: ChatMessage[]
+  messages: ChatMessage[],
+  modelOverride?: string
 ): Promise<{ content: string; inputTokens: number; outputTokens: number }> {
   const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
@@ -338,7 +412,7 @@ async function callGroq(
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({
-      model: config.model || 'llama-3.1-8b-instant',
+      model: modelOverride || config.model || 'llama-3.1-8b-instant',
       messages: messages.map(m => ({
         role: m.role === 'system' ? 'system' : m.role,
         content: m.content
@@ -367,7 +441,8 @@ async function callGroq(
  */
 async function callOpenAICompatible(
   config: AIProviderConfig,
-  messages: ChatMessage[]
+  messages: ChatMessage[],
+  modelOverride?: string
 ): Promise<{ content: string; inputTokens: number; outputTokens: number }> {
   const baseUrl = config.baseUrl || 'https://api.openai.com/v1';
   
@@ -378,7 +453,7 @@ async function callOpenAICompatible(
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({
-      model: config.model || 'gpt-4o-mini',
+      model: modelOverride || config.model || 'gpt-4o-mini',
       messages: messages.map(m => ({
         role: m.role,
         content: m.content
@@ -405,11 +480,12 @@ async function callOpenAICompatible(
 /**
  * Main function: Generate chat completion with fallback
  * Priority: Zhipu AI (ZAI) -> Groq -> OpenAI-compatible
+ * Also enforces subscription plan AI token limits and model type
  */
 export async function generateChatCompletion(
   accountId: string,
   messages: ChatMessage[],
-  options?: { skipTracking?: boolean }
+  options?: { skipTracking?: boolean; requestType?: string; metadata?: Record<string, unknown> }
 ): Promise<ChatCompletionResult> {
   const canUse = await canAccountUseAI(accountId);
   if (!canUse.allowed) {
@@ -421,32 +497,44 @@ export async function generateChatCompletion(
     return { success: false, error: 'No AI providers configured' };
   }
 
+  const aiModelType = canUse.aiModelType || 'basic';
   let lastError: Error | null = null;
   let fallbackUsed = false;
 
   for (const provider of providers) {
     try {
-      console.log(`[AI] Trying provider: ${provider.displayName} (priority: ${provider.priority})`);
+      console.log(`[AI] Trying provider: ${provider.displayName} (priority: ${provider.priority}, plan model: ${aiModelType})`);
 
       let result: { content: string; inputTokens: number; outputTokens: number };
 
+      // Select model based on subscription plan
+      const planModel = getModelForPlan(aiModelType, provider.name, provider.model);
+
       // Use Zhipu AI public API for ZAI provider
       if (provider.name.toLowerCase() === 'zai') {
-        result = await callZhipuAI(messages, (!provider.model || provider.model === 'default') ? 'glm-4-plus' : provider.model);
+        result = await callZhipuAI(messages, planModel);
       } else if (provider.name.toLowerCase() === 'groq') {
-        result = await callGroq(provider, messages);
+        result = await callGroq(provider, messages, planModel);
       } else {
-        result = await callOpenAICompatible(provider, messages);
+        result = await callOpenAICompatible(provider, messages, planModel);
       }
 
       const costUsd = (result.inputTokens * provider.costPerInputToken / 1000) +
         (result.outputTokens * provider.costPerOutputToken / 1000);
 
       if (!options?.skipTracking) {
-        await trackTokenUsage(accountId, provider.id, result.inputTokens, result.outputTokens, costUsd);
+        await trackTokenUsage(
+          accountId, 
+          provider.id, 
+          result.inputTokens, 
+          result.outputTokens, 
+          costUsd,
+          options?.requestType || 'chat',
+          options?.metadata
+        );
       }
 
-      console.log(`[AI] Success with provider: ${provider.displayName}`);
+      console.log(`[AI] Success with provider: ${provider.displayName}, model: ${planModel}`);
 
       return {
         success: true,

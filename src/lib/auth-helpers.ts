@@ -94,16 +94,25 @@ export async function getAuthUser(request: NextRequest): Promise<AuthUser | null
       // Verify user still exists and is active
       const user = await db.user.findUnique({
         where: { id: jwtUser.id },
-        include: { Account: true }
+        include: { 
+          Account: true,
+          Professional: { include: { Account: true } }
+        }
       });
 
       if (user && user.isActive) {
+        // For professional users, get accountId from their Professional relation
+        let accountId = user.Account?.id || null;
+        if (!accountId && user.Professional?.accountId) {
+          accountId = user.Professional.accountId;
+        }
+
         return {
           id: user.id,
           email: user.email,
           name: user.name,
           role: user.role,
-          accountId: user.Account?.id || null,
+          accountId,
         };
       }
     }
@@ -113,16 +122,25 @@ export async function getAuthUser(request: NextRequest): Promise<AuthUser | null
     if (headerUser) {
       const user = await db.user.findUnique({
         where: { id: headerUser.id },
-        include: { Account: true }
+        include: { 
+          Account: true,
+          Professional: { include: { Account: true } }
+        }
       });
 
       if (user && user.isActive) {
+        // For professional users, get accountId from their Professional relation
+        let accountId = user.Account?.id || null;
+        if (!accountId && user.Professional?.accountId) {
+          accountId = user.Professional.accountId;
+        }
+
         return {
           id: user.id,
           email: user.email,
           name: user.name,
           role: user.role,
-          accountId: user.Account?.id || null,
+          accountId,
         };
       }
     }
@@ -167,4 +185,57 @@ export async function getUserIdFromSession(request: NextRequest): Promise<string
  */
 export async function getSessionData(request: NextRequest): Promise<AuthUser | null> {
   return parseJwtSession(request);
+}
+
+/**
+ * Get the Professional record linked to a user (for professional-role users)
+ * Returns the professional ID and account ID, or null if not a professional
+ */
+export async function getProfessionalForUser(userId: string): Promise<{
+  professionalId: string;
+  accountId: string;
+  professional: {
+    id: string;
+    name: string;
+    accountId: string;
+  };
+} | null> {
+  const professional = await db.professional.findUnique({
+    where: { userId },
+    select: { id: true, name: true, accountId: true }
+  });
+
+  if (!professional) return null;
+
+  return {
+    professionalId: professional.id,
+    accountId: professional.accountId,
+    professional
+  };
+}
+
+/**
+ * Check if a user is a professional (not owner or superadmin)
+ * and return their professional-specific data
+ */
+export async function getProfessionalContext(request: NextRequest): Promise<{
+  userId: string;
+  professionalId: string;
+  accountId: string;
+  isProfessional: boolean;
+} | null> {
+  const user = await getAuthUser(request);
+  if (!user) return null;
+
+  if (user.role !== 'professional') return null;
+
+  const proData = await getProfessionalForUser(user.id);
+  if (!proData) return null;
+
+  return {
+    userId: user.id,
+    professionalId: proData.professionalId,
+    accountId: proData.accountId,
+    isProfessional: true
+  };
 }
