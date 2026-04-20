@@ -16,13 +16,20 @@ import { randomBytes } from 'crypto';
 // Configuration
 const ACCESS_TOKEN_EXPIRY = '15m'; // 15 minutes
 const REFRESH_TOKEN_EXPIRY_DAYS = 7; // 7 days
-const JWT_SECRET = new TextEncoder().encode(
-  process.env.JWT_SECRET || process.env.INTEGRATION_ENCRYPTION_KEY || 'agendazap-jwt-secret-key-change-in-production-32c!'
-);
+// JWT secret - MUST be set via environment variable in production
+function getJwtSecret(): Uint8Array {
+  const secret = process.env.JWT_SECRET || process.env.INTEGRATION_ENCRYPTION_KEY;
+  if (!secret) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('FATAL: JWT_SECRET or INTEGRATION_ENCRYPTION_KEY environment variable must be set in production');
+    }
+    console.warn('[JWT] WARNING: Using default secret key. Set JWT_SECRET environment variable for production!');
+    return new TextEncoder().encode('agendazap-dev-secret-key-not-for-production-32c!');
+  }
+  return new TextEncoder().encode(secret);
+}
 
-const REFRESH_TOKEN_SECRET = new TextEncoder().encode(
-  process.env.REFRESH_TOKEN_SECRET || process.env.JWT_SECRET || 'agendazap-refresh-secret-key-change-prod-32c!'
-);
+const JWT_SECRET = getJwtSecret();
 
 export interface TokenPayload {
   userId: string;

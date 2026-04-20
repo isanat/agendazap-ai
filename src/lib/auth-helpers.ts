@@ -35,7 +35,14 @@ async function parseJwtSession(request: NextRequest): Promise<AuthUser | null> {
     // Try JWT verification first
     const payload = await verifyAccessToken(sessionCookie);
     if (payload) {
-      return payload;
+      // Map TokenPayload to AuthUser (TokenPayload uses userId, AuthUser uses id)
+      return {
+        id: payload.userId,
+        email: payload.email,
+        name: payload.name,
+        role: payload.role,
+        accountId: payload.accountId,
+      };
     }
 
     return null;

@@ -1,19 +1,18 @@
 import { db } from '@/lib/db'
 import { NextRequest, NextResponse } from 'next/server'
-import { getServerSession } from 'next-auth'
-import { authOptions } from '@/lib/auth'
+import { getAuthUser } from '@/lib/auth-helpers'
 
 // GET /api/account/me - Get current user's account
 export async function GET(request: NextRequest) {
   try {
-    const session = await getServerSession(authOptions)
+    const authUser = await getAuthUser(request)
     
-    if (!session?.user?.id) {
+    if (!authUser) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
     const user = await db.user.findUnique({
-      where: { id: session.user.id },
+      where: { id: authUser.id },
       include: {
         Account: {
           select: {
@@ -65,9 +64,9 @@ export async function GET(request: NextRequest) {
 // PATCH /api/account/me - Update current user's account
 export async function PATCH(request: NextRequest) {
   try {
-    const session = await getServerSession(authOptions)
+    const authUser = await getAuthUser(request)
     
-    if (!session?.user?.accountId) {
+    if (!authUser || !authUser.accountId) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
@@ -82,7 +81,7 @@ export async function PATCH(request: NextRequest) {
     }
 
     const account = await db.account.update({
-      where: { id: session.user.accountId },
+      where: { id: authUser.accountId },
       data: updateData
     })
 

@@ -57,7 +57,7 @@ export function middleware(request: NextRequest) {
     const response = NextResponse.next();
     
     // Only set CORS headers for allowed origins
-    if (isAllowedOrigin(origin)) {
+    if (origin && isAllowedOrigin(origin)) {
       response.headers.set('Access-Control-Allow-Origin', origin);
       response.headers.set('Access-Control-Allow-Credentials', 'true');
     }
@@ -87,6 +87,35 @@ export function middleware(request: NextRequest) {
     }
     
     return response;
+  }
+
+  // Check authentication for protected page routes
+  const protectedPaths = [
+    '/dashboard',
+    '/appointments',
+    '/clients',
+    '/services',
+    '/professionals',
+    '/whatsapp',
+    '/reports',
+    '/settings',
+    '/admin',
+  ];
+  
+  const isProtectedPath = protectedPaths.some(path => pathname.startsWith(path));
+  
+  if (isProtectedPath) {
+    const cookieHeader = request.headers.get('cookie') || '';
+    const hasSession = cookieHeader.includes('agendazap_session=');
+    const hasRefreshToken = cookieHeader.includes('agendazap_refresh_token=');
+    const hasAuthHeaders = request.headers.get('x-user-id');
+    
+    // If no auth cookies or headers, redirect to login
+    if (!hasSession && !hasRefreshToken && !hasAuthHeaders) {
+      const loginUrl = new URL('/', request.url);
+      loginUrl.searchParams.set('redirect', pathname);
+      return NextResponse.redirect(loginUrl);
+    }
   }
 
   // For non-API routes, add security headers

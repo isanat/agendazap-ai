@@ -117,7 +117,47 @@ export function getAuthHeaders(): AuthHeaders {
 
 /**
  * Fetch with authentication (cookies + headers fallback)
+ * Automatically refreshes expired JWT tokens on 401 responses
  */
+let isRefreshing = false;
+let refreshPromise: Promise<boolean> | null = null;
+
+async function refreshAccessToken(): Promise<boolean> {
+  if (isRefreshing && refreshPromise) {
+    return refreshPromise;
+  }
+  
+  isRefreshing = true;
+  refreshPromise = (async () => {
+    try {
+      const response = await fetch('/api/auth/refresh', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success) {
+          // Update stored user data if returned
+          if (data.user) {
+            localStorage.setItem('agendazap-user', JSON.stringify(data.user));
+          }
+          return true;
+        }
+      }
+      return false;
+    } catch {
+      return false;
+    } finally {
+      isRefreshing = false;
+      refreshPromise = null;
+    }
+  })();
+  
+  return refreshPromise;
+}
+
 export async function authFetch(
   url: string,
   options: RequestInit = {}
@@ -141,20 +181,42 @@ export async function authFetch(
     options.body = JSON.stringify(options.body);
   }
   
-  return fetch(url, {
+  let response = await fetch(url, {
     ...options,
     headers,
     credentials: 'include', // Always include cookies
   });
+  
+  // If 401, try to refresh the token and retry once
+  if (response.status === 401 && !url.includes('/api/auth/')) {
+    const refreshed = await refreshAccessToken();
+    if (refreshed) {
+      // Retry the original request with updated cookies
+      response = await fetch(url, {
+        ...options,
+        headers,
+        credentials: 'include',
+      });
+    } else {
+      // Refresh failed - redirect to login
+      if (typeof window !== 'undefined') {
+        localStorage.removeItem('agendazap-user');
+        localStorage.removeItem('agendazap-account-id');
+        window.location.replace('/');
+      }
+    }
+  }
+  
+  return response;
 }
 
 /**
  * Convenience methods
  */
 export const authGet = (url: string) => authFetch(url, { method: 'GET' });
-export const authPost = (url: string, body?: unknown) => 
+export const authPost = (url: string, body?: BodyInit | null) => 
   authFetch(url, { method: 'POST', body });
-export const authPut = (url: string, body?: unknown) => 
+export const authPut = (url: string, body?: BodyInit | null) => 
   authFetch(url, { method: 'PUT', body });
 export const authDelete = (url: string) => 
   authFetch(url, { method: 'DELETE' });

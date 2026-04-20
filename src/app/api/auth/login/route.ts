@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { serialize } from 'cookie';
 import { compare } from 'bcryptjs';
-import { generateAccessToken, generateRefreshToken } from '@/lib/jwt';
+import { generateAccessToken, generateRefreshToken, verifyAccessToken, revokeAllRefreshTokens } from '@/lib/jwt';
 
 export async function POST(request: NextRequest) {
   try {
@@ -54,9 +53,9 @@ export async function POST(request: NextRequest) {
       } else {
         console.warn(`[Login] User ${user.email} has legacy password hash - password reset required`);
         return NextResponse.json(
-          { 
+          {
             error: 'Por segurança, sua senha precisa ser redefinida. Use a opção "Esqueci minha senha".',
-            requirePasswordReset: true 
+            requirePasswordReset: true
           },
           { status: 401 }
         );
@@ -64,7 +63,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Re-fetch user if we just migrated the password
-    const updatedUser = isLegacyHash && user.role === 'superadmin' 
+    const updatedUser = isLegacyHash && user.role === 'superadmin'
       ? await db.user.findUnique({ where: { id: user.id }, include: { Account: true } })
       : user;
 
@@ -92,11 +91,21 @@ export async function POST(request: NextRequest) {
     // Generate refresh token
     const refreshToken = await generateRefreshToken(sessionUser.id);
 
-    // Set cookies
     const isProduction = process.env.NODE_ENV === 'production';
-    
-    // Access token cookie (short-lived, 15 minutes)
-    const accessTokenCookie = serialize('agendazap_session', accessToken, {
+
+    const response = NextResponse.json({
+      success: true,
+      user: {
+        id: sessionUser.id,
+        email: sessionUser.email,
+        name: sessionUser.name,
+        role: sessionUser.role,
+        accountId: sessionUser.Account?.id || null,
+      },
+    });
+
+    // Set access token cookie (short-lived, 15 minutes)
+    response.cookies.set('agendazap_session', accessToken, {
       httpOnly: true,
       secure: isProduction,
       sameSite: 'lax',
@@ -104,36 +113,22 @@ export async function POST(request: NextRequest) {
       path: '/',
     });
 
-    // Refresh token cookie (long-lived, 7 days)
-    const refreshTokenCookie = serialize('agendazap_refresh_token', refreshToken, {
+    // Set refresh token cookie (long-lived, 7 days)
+    response.cookies.set('agendazap_refresh_token', refreshToken, {
       httpOnly: true,
       secure: isProduction,
       sameSite: 'lax',
       maxAge: 60 * 60 * 24 * 7, // 7 days
       path: '/api/auth', // Only accessible by auth routes for security
     });
-    
+
     console.log('[Login] Setting JWT cookies for user:', sessionUser.email, 'isProduction:', isProduction);
 
-    return NextResponse.json(
-      {
-        success: true,
-        user: {
-          id: sessionUser.id,
-          email: sessionUser.email,
-          name: sessionUser.name,
-          role: sessionUser.role,
-          accountId: sessionUser.Account?.id || null,
-        },
-      },
-      {
-        headers: { 'Set-Cookie': `${accessTokenCookie}, ${refreshTokenCookie}` },
-      }
-    );
+    return response;
   } catch (error) {
     console.error('Login error:', error);
     return NextResponse.json(
-      { 
+      {
         error: 'Erro interno do servidor',
         details: error instanceof Error ? error.message : 'Unknown error'
       },
@@ -163,8 +158,6 @@ export async function GET(request: NextRequest) {
       const sessionCookie = cookies['agendazap_session'];
       if (sessionCookie) {
         try {
-          // Import JWT verification
-          const { verifyAccessToken } = await import('@/lib/jwt');
           const payload = await verifyAccessToken(sessionCookie);
 
           if (payload) {
@@ -188,28 +181,12 @@ export async function GET(request: NextRequest) {
           }
 
           // Access token expired - try refresh
-          const refreshToken = cookies['agendazap_refresh_token'];
-          if (refreshToken) {
-            const { rotateRefreshToken, generateAccessToken: genAccess } = await import('@/lib/jwt');
-            const result = await rotateRefreshToken(refreshToken);
-            
+          const refreshTokenValue = cookies['agendazap_refresh_token'];
+          if (refreshTokenValue) {
+            const result = await rotateRefreshToken(refreshTokenValue);
+
             if (result) {
               const isProduction = process.env.NODE_ENV === 'production';
-              const accessTokenCookie = serialize('agendazap_session', result.accessToken, {
-                httpOnly: true,
-                secure: isProduction,
-                sameSite: 'lax',
-                maxAge: result.expiresIn,
-                path: '/',
-              });
-              const refreshTokenCookie = serialize('agendazap_refresh_token', result.refreshToken, {
-                httpOnly: true,
-                secure: isProduction,
-                sameSite: 'lax',
-                maxAge: 60 * 60 * 24 * 7,
-                path: '/api/auth',
-              });
-
               const newPayload = await verifyAccessToken(result.accessToken);
               if (newPayload) {
                 const user = await db.user.findUnique({
@@ -218,7 +195,7 @@ export async function GET(request: NextRequest) {
                 });
 
                 if (user && user.isActive) {
-                  return NextResponse.json({
+                  const response = NextResponse.json({
                     user: {
                       id: user.id,
                       email: user.email,
@@ -226,9 +203,25 @@ export async function GET(request: NextRequest) {
                       role: user.role,
                       accountId: user.Account?.id || null,
                     },
-                  }, {
-                    headers: { 'Set-Cookie': `${accessTokenCookie}, ${refreshTokenCookie}` },
                   });
+
+                  // Set new cookies after rotation
+                  response.cookies.set('agendazap_session', result.accessToken, {
+                    httpOnly: true,
+                    secure: isProduction,
+                    sameSite: 'lax',
+                    maxAge: result.expiresIn,
+                    path: '/',
+                  });
+                  response.cookies.set('agendazap_refresh_token', result.refreshToken, {
+                    httpOnly: true,
+                    secure: isProduction,
+                    sameSite: 'lax',
+                    maxAge: 60 * 60 * 24 * 7,
+                    path: '/api/auth',
+                  });
+
+                  return response;
                 }
               }
             }
@@ -285,21 +278,28 @@ export async function DELETE(request: NextRequest) {
 
       const sessionCookie = cookies['agendazap_session'];
       if (sessionCookie) {
-        const { verifyAccessToken, revokeAllRefreshTokens } = await import('@/lib/jwt');
-        const payload = await verifyAccessToken(sessionCookie);
-        if (payload) {
-          await revokeAllRefreshTokens(payload.userId);
+        try {
+          const payload = await verifyAccessToken(sessionCookie);
+          if (payload) {
+            await revokeAllRefreshTokens(payload.userId);
+          }
+        } catch {
+          // Token may be expired
         }
       }
 
       // Also try to revoke via refresh token
-      const refreshToken = cookies['agendazap_refresh_token'];
-      if (refreshToken && !sessionCookie) {
-        const storedToken = await db.refreshToken.findUnique({
-          where: { token: refreshToken }
-        });
-        if (storedToken) {
-          await revokeAllRefreshTokensImport(storedToken.userId);
+      const refreshTokenValue = cookies['agendazap_refresh_token'];
+      if (refreshTokenValue && !sessionCookie) {
+        try {
+          const storedToken = await db.refreshToken.findUnique({
+            where: { token: refreshTokenValue }
+          });
+          if (storedToken) {
+            await revokeAllRefreshTokens(storedToken.userId);
+          }
+        } catch {
+          // Ignore errors during cleanup
         }
       }
     }
@@ -307,33 +307,30 @@ export async function DELETE(request: NextRequest) {
     console.error('[Logout] Error revoking tokens:', error);
   }
 
-  const isProduction = process.env.NODE_ENV === 'production';
+  const response = NextResponse.json({ success: true });
 
-  // Clear both cookies
-  const accessTokenCookie = serialize('agendazap_session', '', {
+  // Clear JWT cookies
+  response.cookies.set('agendazap_session', '', {
     httpOnly: true,
-    secure: isProduction,
+    secure: process.env.NODE_ENV === 'production',
     sameSite: 'lax',
     maxAge: -1,
     path: '/',
   });
 
-  const refreshTokenCookie = serialize('agendazap_refresh_token', '', {
+  response.cookies.set('agendazap_refresh_token', '', {
     httpOnly: true,
-    secure: isProduction,
+    secure: process.env.NODE_ENV === 'production',
     sameSite: 'lax',
     maxAge: -1,
     path: '/api/auth',
   });
 
-  return NextResponse.json(
-    { success: true },
-    { headers: { 'Set-Cookie': `${accessTokenCookie}, ${refreshTokenCookie}` } }
-  );
+  return response;
 }
 
-// Helper to avoid circular import
-async function revokeAllRefreshTokensImport(userId: string) {
-  const { revokeAllRefreshTokens } = await import('@/lib/jwt');
-  await revokeAllRefreshTokens(userId);
+// Helper to avoid circular import - use rotateRefreshToken inline
+async function rotateRefreshToken(oldRefreshToken: string) {
+  const { rotateRefreshToken: rotate } = await import('@/lib/jwt');
+  return rotate(oldRefreshToken);
 }

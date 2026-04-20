@@ -1,7 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { rotateRefreshToken, generateAccessToken, verifyAccessToken } from '@/lib/jwt';
-import { db } from '@/lib/db';
-import { serialize } from 'cookie';
+import { rotateRefreshToken, verifyAccessToken } from '@/lib/jwt';
 
 /**
  * POST - Refresh access token using refresh token
@@ -61,11 +59,26 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Set new cookies
     const isProduction = process.env.NODE_ENV === 'production';
 
-    // Access token cookie (short-lived, 15 minutes)
-    const accessTokenCookie = serialize('agendazap_session', result.accessToken, {
+    // Get user info for response
+    const accessTokenPayload = await verifyAccessToken(result.accessToken);
+
+    const response = NextResponse.json({
+      success: true,
+      accessToken: result.accessToken,
+      expiresIn: result.expiresIn,
+      user: accessTokenPayload ? {
+        id: accessTokenPayload.userId,
+        email: accessTokenPayload.email,
+        name: accessTokenPayload.name,
+        role: accessTokenPayload.role,
+        accountId: accessTokenPayload.accountId,
+      } : null,
+    });
+
+    // Set access token cookie (short-lived, 15 minutes)
+    response.cookies.set('agendazap_session', result.accessToken, {
       httpOnly: true,
       secure: isProduction,
       sameSite: 'lax',
@@ -73,8 +86,8 @@ export async function POST(request: NextRequest) {
       path: '/',
     });
 
-    // Refresh token cookie (long-lived, 7 days)
-    const refreshTokenCookie = serialize('agendazap_refresh_token', result.refreshToken, {
+    // Set refresh token cookie (long-lived, 7 days)
+    response.cookies.set('agendazap_refresh_token', result.refreshToken, {
       httpOnly: true,
       secure: isProduction,
       sameSite: 'lax',
@@ -82,28 +95,7 @@ export async function POST(request: NextRequest) {
       path: '/api/auth', // Only accessible by auth routes
     });
 
-    // Get user info for response
-    const accessTokenPayload = await verifyAccessToken(result.accessToken);
-
-    return NextResponse.json(
-      {
-        success: true,
-        accessToken: result.accessToken,
-        expiresIn: result.expiresIn,
-        user: accessTokenPayload ? {
-          id: accessTokenPayload.userId,
-          email: accessTokenPayload.email,
-          name: accessTokenPayload.name,
-          role: accessTokenPayload.role,
-          accountId: accessTokenPayload.accountId,
-        } : null,
-      },
-      {
-        headers: {
-          'Set-Cookie': `${accessTokenCookie}, ${refreshTokenCookie}`,
-        },
-      }
-    );
+    return response;
   } catch (error) {
     console.error('[Refresh] Error:', error);
     return NextResponse.json(

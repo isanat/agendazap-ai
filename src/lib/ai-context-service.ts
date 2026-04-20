@@ -115,6 +115,7 @@ export async function findOrCreateClient(
 ): Promise<string> {
   const normalizedPhone = phone.replace(/\D/g, '');
   
+  // Try to find existing client first
   const existingClient = await db.client.findFirst({
     where: {
       accountId,
@@ -133,22 +134,44 @@ export async function findOrCreateClient(
     return existingClient.id;
   }
 
-  // Create new client with phone number and push name
+  // Create new client - wrap in try/catch for race condition
   const displayName = pushName || `Cliente ${normalizedPhone.slice(-4)}`;
   
-  const newClient = await db.client.create({
-    data: {
-      accountId,
-      name: displayName,
-      phone: normalizedPhone,
-      whatsappPushName: pushName || null,
-      notes: pushName ? `Nome do perfil WhatsApp: ${pushName}` : 'Cliente novo - aguardando nome',
-      lastAiInteraction: new Date(),
+  try {
+    const newClient = await db.client.create({
+      data: {
+        accountId,
+        name: displayName,
+        phone: normalizedPhone,
+        whatsappPushName: pushName || null,
+        notes: pushName ? `Nome do perfil WhatsApp: ${pushName}` : 'Cliente novo - aguardando nome',
+        lastAiInteraction: new Date(),
+      }
+    });
+    console.log(`[AI Context] New client created: ${newClient.id} (${displayName}) for account ${accountId}`);
+    return newClient.id;
+  } catch (error: any) {
+    // Handle race condition: unique constraint violation (P2002)
+    if (error?.code === 'P2002') {
+      // Another request created the client concurrently - find it
+      const concurrentClient = await db.client.findFirst({
+        where: {
+          accountId,
+          phone: { contains: normalizedPhone.slice(-9) }
+        }
+      });
+      if (concurrentClient) {
+        if (pushName && !concurrentClient.whatsappPushName) {
+          await db.client.update({
+            where: { id: concurrentClient.id },
+            data: { whatsappPushName: pushName }
+          });
+        }
+        return concurrentClient.id;
+      }
     }
-  });
-
-  console.log(`[AI Context] New client created: ${newClient.id} (${displayName}) for account ${accountId}`);
-  return newClient.id;
+    throw error;
+  }
 }
 
 /**
