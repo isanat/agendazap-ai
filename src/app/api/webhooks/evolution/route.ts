@@ -582,28 +582,34 @@ async function processIncomingMessage(
             
             if (!matchedClient) {
               // Last resort: search outgoing messages for a successfully sent phone number
-              // This finds real phone numbers from previous successful interactions
+              // Find the most frequently used real phone number (likely the main client)
               const successfulMessages = await db.whatsappMessage.findMany({
                 where: {
                   accountId: lidAccountId,
                   direction: 'outgoing',
                   status: 'sent',
+                  metadata: { contains: 'autoReply' }
                 },
                 orderBy: { createdAt: 'desc' },
-                take: 20,
+                take: 50,
                 select: { clientPhone: true }
               });
               
-              // Find a non-LID phone number from successful sends
-              const realPhones = successfulMessages
-                .map(m => m.clientPhone)
-                .filter(p => p && !p.startsWith('lid:') && /^\d{10,15}$/.test(p));
+              // Count frequency of each real phone number
+              const phoneCounts: Record<string, number> = {};
+              for (const msg of successfulMessages) {
+                const p = msg.clientPhone;
+                if (p && !p.startsWith('lid:') && /^\d{10,15}$/.test(p)) {
+                  phoneCounts[p] = (phoneCounts[p] || 0) + 1;
+                }
+              }
               
-              // If there's only one unique real phone number, use that
-              const uniquePhones = [...new Set(realPhones)];
-              if (uniquePhones.length === 1) {
-                matchedClient = { id: '', name: pushName, phone: uniquePhones[0], whatsappPushName: pushName } as any;
-                console.log(`[Webhook] LID resolved via outgoing message history to: ${uniquePhones[0]}`);
+              // Use the most frequently used real phone number
+              const phoneEntries = Object.entries(phoneCounts).sort((a, b) => b[1] - a[1]);
+              if (phoneEntries.length > 0) {
+                const mostUsedPhone = phoneEntries[0][0];
+                matchedClient = { id: '', name: pushName, phone: mostUsedPhone, whatsappPushName: pushName } as any;
+                console.log(`[Webhook] LID resolved via most-used phone in outgoing messages: ${mostUsedPhone} (${phoneEntries[0][1]} messages)`);
               }
             }
             
