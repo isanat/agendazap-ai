@@ -540,93 +540,63 @@ async function processIncomingMessage(
   if (phone && isLidIdentifier(phone)) {
     console.log(`[Webhook] LID detected, attempting phone resolution for: ${phone}`);
     
-    // Find the account ID first (needed for database lookups)
-    const lidAccountId = await findAccountByInstance(instanceName);
-    
-    // Method 0: Check if we already have a phone number for this LID in our database
-    // Look for a client with this LID as phone who also has a different (non-LID) phone
-    const lidValue = phone.replace('lid:', '');
-    if (lidAccountId) {
-      const existingClientWithLid = await db.client.findFirst({
-        where: {
-          accountId: lidAccountId,
-          phone: { contains: lidValue }
-        }
-      });
+    try {
+      // Find the account ID first (needed for database lookups)
+      const lidAccountId = await findAccountByInstance(instanceName);
       
-      // If the client has a non-LID phone number (from previous interactions), use that
-      if (existingClientWithLid && !existingClientWithLid.phone.startsWith('lid:')) {
-        phone = existingClientWithLid.phone;
-        console.log(`[Webhook] LID resolved via database to existing phone: ${phone}`);
-      } else {
-        // Try Evolution API resolution
+      const lidValue = phone.replace('lid:', '');
+      if (lidAccountId) {
+        // Try Evolution API resolution first (most reliable)
         const resolvedPhone = await resolveLidToPhone(instanceName, phone);
         if (resolvedPhone) {
           phone = resolvedPhone;
-          console.log(`[Webhook] LID resolved successfully to: ${phone}`);
-          
-          // Update the client's phone in the database for future reference
-          if (existingClientWithLid) {
-            await db.client.update({
-              where: { id: existingClientWithLid.id },
-              data: { phone: resolvedPhone }
-            });
-            console.log(`[Webhook] Client phone updated from LID to resolved phone: ${resolvedPhone}`);
-          }
+          console.log(`[Webhook] LID resolved via Evolution API to: ${phone}`);
         } else {
-          // Try to find the client by matching WhatsApp push name
-          // This works if the same person previously contacted us with a regular phone number
+          // Try database: find client by push name or client name
           const pushName = data.pushName;
           if (pushName) {
-            // Strategy 1: Find client by exact whatsapp push name
-            const clientsByPushName = await db.client.findMany({
-              where: {
-                accountId: lidAccountId,
-                whatsappPushName: pushName,
-              }
+            // Find all clients for this account and filter in code
+            const allClients = await db.client.findMany({
+              where: { accountId: lidAccountId },
+              select: { id: true, name: true, phone: true, whatsappPushName: true }
             });
-            let clientByName = clientsByPushName.find(c => !c.phone.startsWith('lid:'));
             
-            // Strategy 2: Find client by name containing the push name
-            if (!clientByName) {
-              const clientsByClientName = await db.client.findMany({
-                where: {
-                  accountId: lidAccountId,
-                  name: { contains: pushName },
-                }
-              });
-              clientByName = clientsByClientName.find(c => !c.phone.startsWith('lid:'));
-              if (clientByName) {
-                console.log(`[Webhook] LID resolved via client name match`);
-              }
-            }
+            // Find a client with a non-LID phone that matches by name or push name
+            const matchingClient = allClients.find(c => 
+              !c.phone.startsWith('lid:') && 
+              (c.whatsappPushName === pushName || 
+               (c.name && c.name.includes(pushName)))
+            );
             
-            if (clientByName && !clientByName.phone.startsWith('lid:')) {
-              phone = clientByName.phone;
-              console.log(`[Webhook] LID resolved via name/pushName match to: ${phone}`);
+            if (matchingClient) {
+              phone = matchingClient.phone;
+              console.log(`[Webhook] LID resolved via database name match to: ${phone}`);
               
-              // Update the client's whatsappPushName for future matching
-              if (clientByName.whatsappPushName !== pushName) {
+              // Update whatsappPushName for future matching
+              if (matchingClient.whatsappPushName !== pushName) {
                 await db.client.update({
-                  where: { id: clientByName.id },
+                  where: { id: matchingClient.id },
                   data: { whatsappPushName: pushName }
                 });
               }
             } else {
-              console.warn(`[Webhook] ⚠️ Could not resolve LID to phone number. JID: ${data.key?.remoteJid}, pushName: ${pushName || 'N/A'}`);
+              console.warn(`[Webhook] ⚠️ Could not resolve LID. JID: ${data.key?.remoteJid}, pushName: ${pushName}`);
             }
           } else {
-            console.warn(`[Webhook] ⚠️ Could not resolve LID to phone number. No pushName available.`);
+            console.warn(`[Webhook] ⚠️ Could not resolve LID. No pushName available.`);
           }
         }
+      } else {
+        // No account found yet, try Evolution API resolution only
+        const resolvedPhone = await resolveLidToPhone(instanceName, phone);
+        if (resolvedPhone) {
+          phone = resolvedPhone;
+          console.log(`[Webhook] LID resolved via Evolution API to: ${phone}`);
+        }
       }
-    } else {
-      // No account found yet, try Evolution API resolution without database lookup
-      const resolvedPhone = await resolveLidToPhone(instanceName, phone);
-      if (resolvedPhone) {
-        phone = resolvedPhone;
-        console.log(`[Webhook] LID resolved via Evolution API to: ${phone}`);
-      }
+    } catch (lidError) {
+      console.error(`[Webhook] Error during LID resolution:`, lidError);
+      // Don't fail the entire request - continue with the LID as phone
     }
   }
   
