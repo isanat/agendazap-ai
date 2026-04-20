@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { Plus, Edit, Trash2, Phone, Mail, Calendar, Search, AlertTriangle, CheckCircle, Users, Shield, Info, Download, MessageSquare, Checkbox, Loader2, FileSpreadsheet, FileText, CheckCircle2 } from 'lucide-react'
+import { Plus, Edit, Trash2, Phone, Mail, Calendar, Search, AlertTriangle, CheckCircle, Users, Shield, Info, Download, MessageSquare, Loader2, FileSpreadsheet, FileText, CheckCircle2 } from 'lucide-react'
 import { authFetch } from '@/lib/auth-fetch'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -413,7 +413,7 @@ export function ClientsPage() {
         <AlertTriangle className="w-16 h-16 text-red-500 mb-4" />
         <h2 className="text-xl font-semibold mb-2">Erro ao carregar clientes</h2>
         <p className="text-muted-foreground mb-4">{error}</p>
-        <Button onClick={fetchClients}>Tentar novamente</Button>
+        <Button onClick={() => fetchClients()}>Tentar novamente</Button>
       </div>
     )
   }

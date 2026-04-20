@@ -725,7 +725,7 @@ function MainPageContent() {
           <MobileBottomNav />
           
           {/* Keyboard Shortcuts Help */}
-          <KeyboardShortcutsHelp open={showHelp} setOpen={setShowHelp} />
+          <KeyboardShortcutsHelp open={showHelp} onOpenChange={setShowHelp} />
           
           {/* Onboarding Tutorial */}
           <OnboardingTutorial />

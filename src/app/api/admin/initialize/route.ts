@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { hashPassword } from '@/lib/auth';
+import type { SubscriptionPlan } from '@prisma/client';
 
 // POST - Inicializar o sistema com superadmin e planos padrão
 export async function POST(request: NextRequest) {
@@ -126,7 +127,7 @@ export async function POST(request: NextRequest) {
       },
     ];
 
-    const createdPlans = [];
+    const createdPlans: SubscriptionPlan[] = [];
     for (const plan of defaultPlans) {
       const created = await db.subscriptionPlan.create({ data: plan });
       createdPlans.push(created);

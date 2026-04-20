@@ -19,7 +19,7 @@ async function initialize() {
         name: 'Super Admin',
         password: hashedPassword,
         role: 'superadmin',
-        emailVerified: new Date(),
+        // emailVerified is not a field in the User model
       }
     });
     console.log('✅ SuperAdmin criado:', superAdmin.email);
@@ -28,22 +28,19 @@ async function initialize() {
   }
   
   // 2. Criar configurações da Evolution API
-  const configs = [
-    { key: 'evolution_api_url', value: 'http://95.111.231.60:8080' },
-    { key: 'evolution_api_key', value: 'AGEND!A_zAP_2026@01070801' },
-    { key: 'evolution_instance_name', value: 'agendazap' },
-    { key: 'evolution_webhook_url', value: 'https://agendazap-ai.vercel.app/api/webhooks/evolution' },
-    { key: 'evolution_configured', value: 'true' },
-  ];
-  
-  for (const config of configs) {
-    const existing = await prisma.systemConfiguration.findUnique({ where: { key: config.key } });
-    if (!existing) {
-      await prisma.systemConfiguration.create({ data: config });
-      console.log('✅ Configuração salva:', config.key);
-    } else {
-      console.log('✅ Configuração já existe:', config.key);
-    }
+  // Check if system configuration already exists
+  const existingConfig = await prisma.systemConfiguration.findFirst();
+  if (!existingConfig) {
+    await prisma.systemConfiguration.create({
+      data: {
+        evolutionApiUrl: 'http://95.111.231.60:8080',
+        evolutionApiKey: 'AGEND!A_zAP_2026@01070801',
+        evolutionWebhookUrl: 'https://agendazap-ai.vercel.app/api/webhooks/evolution',
+      }
+    });
+    console.log('✅ Configuração do sistema salva');
+  } else {
+    console.log('✅ Configuração do sistema já existe');
   }
   
   // 3. Criar planos de assinatura

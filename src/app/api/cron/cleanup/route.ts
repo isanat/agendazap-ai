@@ -12,7 +12,10 @@ import { db } from '@/lib/db';
 export async function POST(request: NextRequest) {
   // Verify cron secret to prevent unauthorized calls
   const cronSecret = request.headers.get('x-cron-secret');
-  if (cronSecret !== process.env.CRON_SECRET && process.env.CRON_SECRET) {
+  const authHeader = request.headers.get('authorization');
+  // Vercel cron sends "Authorization: Bearer <CRON_SECRET>"
+  const bearerToken = authHeader?.replace('Bearer ', '');
+  if (cronSecret !== process.env.CRON_SECRET && bearerToken !== process.env.CRON_SECRET && process.env.CRON_SECRET) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 

@@ -43,7 +43,7 @@ export async function GET(request: NextRequest) {
     
     // Check authorization
     let isAuthorized = false;
-    let userId = null;
+    let userId: string | null = null;
 
     if (headerUserRole === 'superadmin') {
       isAuthorized = true;

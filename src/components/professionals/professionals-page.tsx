@@ -322,7 +322,7 @@ export function ProfessionalsPage() {
         <Users className="w-16 h-16 text-red-500 mb-4" />
         <h2 className="text-xl font-semibold mb-2">Erro ao carregar profissionais</h2>
         <p className="text-muted-foreground mb-4">{error}</p>
-        <Button onClick={fetchProfessionals}>Tentar novamente</Button>
+        <Button onClick={() => fetchProfessionals()}>Tentar novamente</Button>
       </div>
     )
   }
@@ -618,7 +618,7 @@ export function ProfessionalsPage() {
                         whileHover={{ scale: 1.1, rotate: 5 }}
                         transition={{ type: "spring", stiffness: 300 }}
                       >
-                        <Avatar className="w-12 h-12 ring-2 ring-offset-2 ring-transparent group-hover:ring-muted transition-all" style={{ ringColor: professional.color }}>
+                        <Avatar className="w-12 h-12 ring-2 ring-offset-2 ring-transparent group-hover:ring-muted transition-all" style={{ '--tw-ring-color': professional.color } as React.CSSProperties}>
                           <AvatarImage src={professional.avatar} />
                           <AvatarFallback style={{ backgroundColor: professional.color, color: 'white' }}>
                             {professional.name.split(' ').map(n => n[0]).join('').slice(0, 2)}

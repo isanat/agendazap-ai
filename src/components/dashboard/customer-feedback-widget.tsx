@@ -20,7 +20,7 @@ import {
   CheckCircle2,
   Clock,
   Calendar,
-  Sentiment,
+  MessageCircleHeart,
   Smile,
   Meh,
   Frown

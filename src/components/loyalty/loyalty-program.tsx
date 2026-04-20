@@ -276,7 +276,7 @@ export function LoyaltyProgram() {
               key={tier.id}
               variant={filter === tier.id ? 'default' : 'outline'}
               className="cursor-pointer"
-              onClick={() => setFilter(tier.id)}
+              onClick={() => setFilter(tier.id as 'all' | 'bronze' | 'silver' | 'gold' | 'platinum')}
             >
               {tier.name}
             </Badge>

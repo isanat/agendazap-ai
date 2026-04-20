@@ -109,7 +109,7 @@ const statusLabels: Record<string, string> = {
 
 // Generate time slots from 8:00 to 20:00
 const generateTimeSlots = () => {
-  const slots = []
+  const slots: string[] = []
   for (let hour = 8; hour < 20; hour++) {
     slots.push(`${hour.toString().padStart(2, '0')}:00`)
     slots.push(`${hour.toString().padStart(2, '0')}:30`)
@@ -665,7 +665,7 @@ export function AppointmentsPage() {
         <Calendar className="w-16 h-16 text-red-500 mb-4" />
         <h2 className="text-xl font-semibold mb-2">Erro ao carregar agendamentos</h2>
         <p className="text-muted-foreground mb-4">{error}</p>
-        <Button onClick={fetchData}>Tentar novamente</Button>
+        <Button onClick={() => fetchData()}>Tentar novamente</Button>
       </div>
     )
   }

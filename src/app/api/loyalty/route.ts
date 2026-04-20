@@ -13,6 +13,10 @@ export async function GET(request: NextRequest) {
 
     const accountId = authUser.accountId;
 
+    if (!accountId) {
+      return NextResponse.json({ error: 'Não autorizado' }, { status: 401 });
+    }
+
     // Buscar ou criar programa de fidelidade
     let loyaltyProgram = await db.loyaltyProgram.findUnique({
       where: { accountId },
@@ -72,10 +76,10 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
       program: loyaltyProgram,
       stats: {
-        totalPoints: stats._sum.points || 0,
-        totalTransactions: stats._count.id,
-        totalEarned: totalEarned._sum.points || 0,
-        totalRedeemed: Math.abs(totalRedeemed._sum.points || 0),
+        totalPoints: stats._sum?.points ?? 0,
+        totalTransactions: (stats._count as { id?: number } | undefined)?.id ?? 0,
+        totalEarned: totalEarned._sum?.points ?? 0,
+        totalRedeemed: Math.abs(totalRedeemed._sum?.points ?? 0),
         clientsWithPoints,
       },
     });
@@ -98,6 +102,11 @@ export async function PUT(request: NextRequest) {
     }
 
     const accountId = authUser.accountId;
+
+    if (!accountId) {
+      return NextResponse.json({ error: 'Não autorizado' }, { status: 401 });
+    }
+
     const body = await request.json();
 
     const {

@@ -353,15 +353,15 @@ async function processIncomingMessage(
       message: messageText,
       messageType,
       status: 'received',
-      metadata: {
-        messageId: data.key?.id,
-        pushName: data.pushName,
-        timestamp: data.messageTimestamp,
+      metadata: JSON.parse(JSON.stringify({
+        messageId: data.key?.id ?? undefined,
+        pushName: data.pushName ?? undefined,
+        timestamp: data.messageTimestamp ?? undefined,
         audioTranscribed,
         detectedName: detectedName || undefined,
         detectedPayment: detectedPayment || undefined,
-        raw: data.message
-      }
+        raw: data.message ?? undefined,
+      })),
     }
   });
 

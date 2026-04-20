@@ -46,7 +46,18 @@ export async function POST(request: NextRequest) {
 
     // Create account and user in a transaction
     const result = await db.$transaction(async (tx) => {
-      // Create account
+      // Create user first (Account references User via ownerId)
+      const user = await tx.user.create({
+        data: {
+          email,
+          name,
+          password: hashedPassword,
+          role: 'owner',
+          isActive: true,
+        }
+      });
+
+      // Create account with ownerId referencing the user
       const account = await tx.account.create({
         data: {
           businessName,
@@ -55,32 +66,21 @@ export async function POST(request: NextRequest) {
           plan: 'pro',
           noShowFeeEnabled: true,
           noShowFeeAmount: 50,
-        }
-      });
-
-      // Create user
-      const user = await tx.user.create({
-        data: {
-          email,
-          name,
-          password: hashedPassword,
-          role: 'owner',
-          accountId: account.id,
-          isActive: true,
+          ownerId: user.id,
         }
       });
 
       // Create default services
       await tx.service.createMany({
         data: [
-          { accountId: account.id, name: 'Corte Feminino', duration: 60, price: 80, category: 'Corte', isActive: true },
-          { accountId: account.id, name: 'Corte Masculino', duration: 30, price: 45, category: 'Corte', isActive: true },
-          { accountId: account.id, name: 'Barba', duration: 30, price: 35, category: 'Barba', isActive: true },
-          { accountId: account.id, name: 'Manicure', duration: 45, price: 40, category: 'Unhas', isActive: true },
-          { accountId: account.id, name: 'Pedicure', duration: 45, price: 45, category: 'Unhas', isActive: true },
-          { accountId: account.id, name: 'Hidratação', duration: 60, price: 100, category: 'Tratamento', isActive: true },
-          { accountId: account.id, name: 'Coloração', duration: 120, price: 180, category: 'Coloração', isActive: true },
-          { accountId: account.id, name: 'Mechas', duration: 180, price: 280, category: 'Coloração', isActive: true },
+          { accountId: account.id, name: 'Corte Feminino', durationMinutes: 60, price: 80, category: 'Corte', isActive: true },
+          { accountId: account.id, name: 'Corte Masculino', durationMinutes: 30, price: 45, category: 'Corte', isActive: true },
+          { accountId: account.id, name: 'Barba', durationMinutes: 30, price: 35, category: 'Barba', isActive: true },
+          { accountId: account.id, name: 'Manicure', durationMinutes: 45, price: 40, category: 'Unhas', isActive: true },
+          { accountId: account.id, name: 'Pedicure', durationMinutes: 45, price: 45, category: 'Unhas', isActive: true },
+          { accountId: account.id, name: 'Hidratação', durationMinutes: 60, price: 100, category: 'Tratamento', isActive: true },
+          { accountId: account.id, name: 'Coloração', durationMinutes: 120, price: 180, category: 'Coloração', isActive: true },
+          { accountId: account.id, name: 'Mechas', durationMinutes: 180, price: 280, category: 'Coloração', isActive: true },
         ]
       });
 

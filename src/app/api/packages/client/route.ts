@@ -12,6 +12,11 @@ export async function GET(request: NextRequest) {
     }
 
     const accountId = authUser.accountId;
+
+    if (!accountId) {
+      return NextResponse.json({ error: 'Não autorizado' }, { status: 401 });
+    }
+
     const { searchParams } = new URL(request.url);
     const clientId = searchParams.get('clientId');
 
@@ -83,6 +88,11 @@ export async function POST(request: NextRequest) {
     }
 
     const accountId = authUser.accountId;
+
+    if (!accountId) {
+      return NextResponse.json({ error: 'Não autorizado' }, { status: 401 });
+    }
+
     const body = await request.json();
 
     const { clientId, packageId, paymentMethod, paid } = body;
@@ -168,6 +178,11 @@ export async function PUT(request: NextRequest) {
     }
 
     const accountId = authUser.accountId;
+
+    if (!accountId) {
+      return NextResponse.json({ error: 'Não autorizado' }, { status: 401 });
+    }
+
     const body = await request.json();
 
     const { clientPackageId, appointmentId, notes } = body;
@@ -224,7 +239,7 @@ export async function PUT(request: NextRequest) {
       data: {
         usedSessions: newUsedSessions,
         status: newStatus,
-        usages: {
+        PackageUsage: {
           create: {
             appointmentId,
             notes,

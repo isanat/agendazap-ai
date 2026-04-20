@@ -34,15 +34,16 @@ interface LoyaltyTier {
   maxPoints: number
   discount: number
   color: string
+  bg: string
   bgGradient: string
   icon: React.ElementType
 }
 
 const tiers: LoyaltyTier[] = [
-  { name: 'Bronze', minPoints: 0, maxPoints: 199, discount: 5, color: 'text-amber-700', bgGradient: 'from-amber-600 to-orange-700', icon: Medal },
-  { name: 'Prata', minPoints: 200, maxPoints: 499, discount: 10, color: 'text-slate-500', bgGradient: 'from-slate-400 to-slate-600', icon: Award },
-  { name: 'Ouro', minPoints: 500, maxPoints: 999, discount: 15, color: 'text-yellow-600', bgGradient: 'from-yellow-500 to-amber-600', icon: Trophy },
-  { name: 'Diamante', minPoints: 1000, maxPoints: Infinity, discount: 20, color: 'text-cyan-500', bgGradient: 'from-cyan-400 to-blue-600', icon: Crown }
+  { name: 'Bronze', minPoints: 0, maxPoints: 199, discount: 5, color: 'text-amber-700', bg: 'bg-amber-100', bgGradient: 'from-amber-600 to-orange-700', icon: Medal },
+  { name: 'Prata', minPoints: 200, maxPoints: 499, discount: 10, color: 'text-slate-500', bg: 'bg-slate-100', bgGradient: 'from-slate-400 to-slate-600', icon: Award },
+  { name: 'Ouro', minPoints: 500, maxPoints: 999, discount: 15, color: 'text-yellow-600', bg: 'bg-yellow-100', bgGradient: 'from-yellow-500 to-amber-600', icon: Trophy },
+  { name: 'Diamante', minPoints: 1000, maxPoints: Infinity, discount: 20, color: 'text-cyan-500', bg: 'bg-cyan-100', bgGradient: 'from-cyan-400 to-blue-600', icon: Crown }
 ]
 
 interface LoyaltyClient {

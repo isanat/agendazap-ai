@@ -31,6 +31,10 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Não autorizado' }, { status: 401 });
     }
 
+    if (!authUser.accountId) {
+      return NextResponse.json({ error: 'Conta não encontrada' }, { status: 400 });
+    }
+
     // Check if Mercado Pago is configured
     if (!MP_CONFIG.clientId || !MP_CONFIG.clientSecret || !MP_CONFIG.redirectUri) {
       return NextResponse.json({

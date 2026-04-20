@@ -12,6 +12,11 @@ export async function GET(request: NextRequest) {
     }
 
     const accountId = authUser.accountId;
+
+    if (!accountId) {
+      return NextResponse.json({ error: 'Não autorizado' }, { status: 401 });
+    }
+
     const { searchParams } = new URL(request.url);
     const clientId = searchParams.get('clientId');
 
@@ -81,6 +86,11 @@ export async function POST(request: NextRequest) {
     }
 
     const accountId = authUser.accountId;
+
+    if (!accountId) {
+      return NextResponse.json({ error: 'Não autorizado' }, { status: 401 });
+    }
+
     const body = await request.json();
 
     const { clientId, points, type, description, appointmentId } = body;
@@ -120,7 +130,7 @@ export async function POST(request: NextRequest) {
     });
 
     // Calcular data de expiração
-    let expiryDate = null;
+    let expiryDate: Date | null = null;
     if (points > 0 && program) {
       expiryDate = new Date();
       expiryDate.setDate(expiryDate.getDate() + program.pointsExpirationDays);

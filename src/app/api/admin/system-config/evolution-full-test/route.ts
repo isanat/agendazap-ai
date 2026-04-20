@@ -108,10 +108,12 @@ export async function GET(request: NextRequest) {
     // TEST 4: Instance Status
     // ========================================
     if (instances.length > 0) {
-      const connectedInstances = instances.filter((inst: Record<string, unknown>) => 
-        inst && typeof inst === 'object' && 
-        ('state' in inst ? (inst as Record<string, unknown>).state === 'open' : false)
-      );
+      const connectedInstances = instances.filter((inst) => {
+        if (!inst || typeof inst !== 'object') return false;
+        const obj = inst as Record<string, unknown>;
+        const state = obj.state ?? (obj.instance as Record<string, unknown> | undefined)?.state;
+        return state === 'open';
+      });
 
       addTest('Status das Instâncias', 
         connectedInstances.length > 0 ? 'OK' : 'WARNING',
@@ -119,10 +121,14 @@ export async function GET(request: NextRequest) {
         {
           total: instances.length,
           connected: connectedInstances.length,
-          instances: instances.slice(0, 5).map((inst: Record<string, unknown>) => ({
-            name: (inst as Record<string, unknown>).name || (inst as Record<string, unknown>).instance?.name,
-            state: (inst as Record<string, unknown>).state || (inst as Record<string, unknown>).instance?.state,
-          })),
+          instances: instances.slice(0, 5).map((inst) => {
+            const obj = inst as Record<string, unknown>;
+            const instObj = obj.instance as Record<string, unknown> | undefined;
+            return {
+              name: (obj.name ?? instObj?.name) as string | undefined,
+              state: (obj.state ?? instObj?.state) as string | undefined,
+            };
+          }),
         }
       );
     } else {
@@ -185,7 +191,8 @@ export async function GET(request: NextRequest) {
     if (instances.length > 0 && config.evolutionApiKey) {
       try {
         const firstInstance = instances[0] as Record<string, unknown>;
-        const instanceName = firstInstance?.name || firstInstance?.instance?.name;
+        const instObj = firstInstance?.instance as Record<string, unknown> | undefined;
+        const instanceName = (firstInstance?.name ?? instObj?.name) as string | undefined;
         
         if (instanceName) {
           const infoResponse = await fetch(`${config.evolutionApiUrl}/instance/connectionState/${instanceName}`, {

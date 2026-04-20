@@ -158,9 +158,13 @@ async function refreshAccessToken(): Promise<boolean> {
   return refreshPromise;
 }
 
+interface AuthFetchOptions extends Omit<RequestInit, 'body'> {
+  body?: Record<string, unknown> | BodyInit | null;
+}
+
 export async function authFetch(
   url: string,
-  options: RequestInit = {}
+  options: AuthFetchOptions = {}
 ): Promise<Response> {
   const authHeaders = getAuthHeaders();
   
@@ -173,30 +177,30 @@ export async function authFetch(
     }
   });
   
-  // Add Content-Type if not set and body is object
-  if (options.body && typeof options.body === 'object' && !(options.body instanceof FormData)) {
+  // Serialize body if it's a plain object (not FormData, Blob, etc.)
+  let body: BodyInit | null | undefined = options.body as BodyInit | null | undefined;
+  if (options.body && typeof options.body === 'object' && !(options.body instanceof FormData) && !(options.body instanceof Blob) && !(options.body instanceof ArrayBuffer) && !(options.body instanceof ReadableStream) && !(options.body instanceof URLSearchParams)) {
     if (!headers.has('Content-Type')) {
       headers.set('Content-Type', 'application/json');
     }
-    options.body = JSON.stringify(options.body);
+    body = JSON.stringify(options.body);
   }
   
-  let response = await fetch(url, {
+  const fetchOptions: RequestInit = {
     ...options,
+    body,
     headers,
     credentials: 'include', // Always include cookies
-  });
+  };
+  
+  let response = await fetch(url, fetchOptions);
   
   // If 401, try to refresh the token and retry once
   if (response.status === 401 && !url.includes('/api/auth/')) {
     const refreshed = await refreshAccessToken();
     if (refreshed) {
       // Retry the original request with updated cookies
-      response = await fetch(url, {
-        ...options,
-        headers,
-        credentials: 'include',
-      });
+      response = await fetch(url, fetchOptions);
     } else {
       // Refresh failed - redirect to login
       if (typeof window !== 'undefined') {
@@ -214,9 +218,9 @@ export async function authFetch(
  * Convenience methods
  */
 export const authGet = (url: string) => authFetch(url, { method: 'GET' });
-export const authPost = (url: string, body?: BodyInit | null) => 
+export const authPost = (url: string, body?: Record<string, unknown> | BodyInit | null) => 
   authFetch(url, { method: 'POST', body });
-export const authPut = (url: string, body?: BodyInit | null) => 
+export const authPut = (url: string, body?: Record<string, unknown> | BodyInit | null) => 
   authFetch(url, { method: 'PUT', body });
 export const authDelete = (url: string) => 
   authFetch(url, { method: 'DELETE' });

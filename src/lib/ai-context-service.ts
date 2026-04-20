@@ -348,7 +348,7 @@ export async function getSalonContext(accountId: string): Promise<SalonContext> 
   const packagesRaw = await db.package.findMany({
     where: { accountId, isActive: true },
     include: {
-      PackageService: {
+      packageServices: {
         include: { Service: true }
       }
     }
@@ -360,7 +360,7 @@ export async function getSalonContext(accountId: string): Promise<SalonContext> 
     description: pkg.description,
     price: pkg.price,
     originalPrice: pkg.originalPrice || pkg.price,
-    services: pkg.PackageService?.map((ps: any) => ps.Service?.name).filter(Boolean) || []
+    services: pkg.packageServices?.map((ps: any) => ps.Service?.name).filter(Boolean) || []
   }));
   
   return {
@@ -409,14 +409,14 @@ export async function getClientContext(
     orderBy: { datetime: 'desc' },
     take: 10,
     include: {
-      service: true,
-      professional: true
+      Service: true,
+      Professional: true
     }
   });
   
   const lastServices = lastAppointments.map((apt: any) => ({
-    serviceName: apt.service?.name || 'Serviço',
-    professionalName: apt.professional?.name || null,
+    serviceName: apt.Service?.name || 'Serviço',
+    professionalName: apt.Professional?.name || null,
     date: apt.datetime,
     status: apt.status,
     cancellationReason: apt.cancellationReason || null
@@ -432,15 +432,15 @@ export async function getClientContext(
     orderBy: { datetime: 'asc' },
     take: 5,
     include: {
-      service: true,
-      professional: true
+      Service: true,
+      Professional: true
     }
   });
   
   const upcoming = upcomingAppointments.map((apt: any) => ({
     id: apt.id,
-    serviceName: apt.service?.name || 'Serviço',
-    professionalName: apt.professional?.name || null,
+    serviceName: apt.Service?.name || 'Serviço',
+    professionalName: apt.Professional?.name || null,
     date: apt.datetime,
     status: apt.status
   }));
@@ -454,14 +454,14 @@ export async function getClientContext(
     orderBy: { cancelledAt: 'desc' },
     take: 5,
     include: {
-      service: true,
-      professional: true
+      Service: true,
+      Professional: true
     }
   });
 
   const cancelled = cancelledAppointments.map((apt: any) => ({
-    serviceName: apt.service?.name || 'Serviço',
-    professionalName: apt.professional?.name || null,
+    serviceName: apt.Service?.name || 'Serviço',
+    professionalName: apt.Professional?.name || null,
     date: apt.datetime,
     cancellationReason: apt.cancellationReason || null,
     cancelledAt: apt.cancelledAt || null
@@ -476,11 +476,11 @@ export async function getClientContext(
   const professionalCounts: Record<string, number> = {};
   
   completedAppointments.forEach((apt: any) => {
-    if (apt.service?.name) {
-      serviceCounts[apt.service.name] = (serviceCounts[apt.service.name] || 0) + 1;
+    if (apt.Service?.name) {
+      serviceCounts[apt.Service.name] = (serviceCounts[apt.Service.name] || 0) + 1;
     }
-    if (apt.professional?.name) {
-      professionalCounts[apt.professional.name] = (professionalCounts[apt.professional.name] || 0) + 1;
+    if (apt.Professional?.name) {
+      professionalCounts[apt.Professional.name] = (professionalCounts[apt.Professional.name] || 0) + 1;
     }
   });
   
@@ -532,7 +532,7 @@ function calculateServiceFrequency(appointments: any[]): ClientContext['serviceF
   const serviceDates: Record<string, Date[]> = {};
   
   appointments.forEach((apt: any) => {
-    const name = apt.service?.name;
+    const name = apt.Service?.name;
     if (!name) return;
     if (!serviceDates[name]) serviceDates[name] = [];
     serviceDates[name].push(new Date(apt.datetime));

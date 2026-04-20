@@ -181,7 +181,7 @@ function ToastItem({ toast, onRemove }: { toast: Toast; onRemove: () => void }) 
         initial={{ width: '100%' }}
         animate={{ width: 0 }}
         transition={{ duration: toast.duration || 5000, ease: 'linear' }}
-        onComplete={onRemove}
+        onAnimationComplete={onRemove}
       />
     </motion.div>
   )

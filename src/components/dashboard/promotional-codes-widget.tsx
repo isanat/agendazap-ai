@@ -319,7 +319,7 @@ export function PromotionalCodesWidget({ accountId }: PromotionalCodesWidgetProp
                       {promo.code}
                     </div>
                     <Button
-                      size="ghost"
+                      size="icon"
                       variant="ghost"
                       className="h-6 w-6 p-0"
                       onClick={() => handleCopyCode(promo.code)}

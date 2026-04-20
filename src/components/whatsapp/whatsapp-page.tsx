@@ -449,7 +449,7 @@ export function WhatsappPage() {
             </Tooltip>
           </TooltipProvider>
 
-          <Button variant="outline" onClick={fetchData}>
+          <Button variant="outline" onClick={() => fetchData()}>
             <RefreshCw className="w-4 h-4 mr-2" />
             Sincronizar
           </Button>

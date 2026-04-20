@@ -40,6 +40,10 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Não autorizado' }, { status: 401 });
     }
 
+    if (!authUser.accountId) {
+      return NextResponse.json({ error: 'Conta não encontrada' }, { status: 400 });
+    }
+
     // Buscar integração WhatsApp
     const integration = await db.integration.findUnique({
       where: {

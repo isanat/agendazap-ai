@@ -16,26 +16,25 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
         with:
-          node-version: '20'
-          cache: 'npm'
+          bun-version: latest
 
       - name: Install dependencies
-        run: npm ci
+        run: bun install
 
       - name: Generate Prisma Client
-        run: npx prisma generate
+        run: bunx prisma generate
 
       - name: Run ESLint
-        run: npm run lint
+        run: bun run lint
 
       - name: Run tests
-        run: npm test
+        run: bun run test
 
       - name: Type check
-        run: npx tsc --noEmit
+        run: bunx tsc --noEmit
         continue-on-error: true
 
       - name: Check for console.log statements
@@ -55,7 +54,7 @@ jobs:
           fi
 
       - name: Validate Prisma schema
-        run: npx prisma validate
+        run: bunx prisma validate
 
       - name: Check for TypeScript errors in modified files
         run: |

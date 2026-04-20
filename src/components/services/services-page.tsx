@@ -312,7 +312,7 @@ export function ServicesPage() {
         <Sparkles className="w-16 h-16 text-red-500 mb-4" />
         <h2 className="text-xl font-semibold mb-2">Erro ao carregar serviços</h2>
         <p className="text-muted-foreground mb-4">{error}</p>
-        <Button onClick={fetchServices}>Tentar novamente</Button>
+        <Button onClick={() => fetchServices()}>Tentar novamente</Button>
       </div>
     )
   }
