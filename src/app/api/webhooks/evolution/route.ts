@@ -592,7 +592,7 @@ async function processIncomingMessage(
               const clientsByClientName = await db.client.findMany({
                 where: {
                   accountId: lidAccountId,
-                  name: { contains: pushName, mode: 'insensitive' },
+                  name: { contains: pushName },
                 }
               });
               clientByName = clientsByClientName.find(c => !c.phone.startsWith('lid:'));
