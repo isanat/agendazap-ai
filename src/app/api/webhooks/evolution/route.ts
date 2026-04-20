@@ -581,16 +581,29 @@ async function processIncomingMessage(
             }
             
             if (!matchedClient) {
-              // Last resort: find any client with a real phone that had recent interactions
-              // This handles the case where the pushName doesn't match but it's the same person
-              const clientsWithRealPhone = allClients.filter(c => 
-                !c.phone.startsWith('lid:') && 
-                /^\d{10,15}$/.test(c.phone)
-              );
-              // If there's only one client with a real phone, use that
-              if (clientsWithRealPhone.length === 1) {
-                matchedClient = clientsWithRealPhone[0];
-                console.log(`[Webhook] LID resolved via single-client fallback to: ${matchedClient.phone}`);
+              // Last resort: search outgoing messages for a successfully sent phone number
+              // This finds real phone numbers from previous successful interactions
+              const successfulMessages = await db.whatsappMessage.findMany({
+                where: {
+                  accountId: lidAccountId,
+                  direction: 'outgoing',
+                  status: 'sent',
+                },
+                orderBy: { createdAt: 'desc' },
+                take: 20,
+                select: { clientPhone: true }
+              });
+              
+              // Find a non-LID phone number from successful sends
+              const realPhones = successfulMessages
+                .map(m => m.clientPhone)
+                .filter(p => p && !p.startsWith('lid:') && /^\d{10,15}$/.test(p));
+              
+              // If there's only one unique real phone number, use that
+              const uniquePhones = [...new Set(realPhones)];
+              if (uniquePhones.length === 1) {
+                matchedClient = { id: '', name: pushName, phone: uniquePhones[0], whatsappPushName: pushName } as any;
+                console.log(`[Webhook] LID resolved via outgoing message history to: ${uniquePhones[0]}`);
               }
             }
             
