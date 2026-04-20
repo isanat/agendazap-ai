@@ -41,7 +41,6 @@ export interface Appointment {
   endTime: Date
   status: 'pending' | 'confirmed' | 'completed' | 'no_show' | 'cancelled'
   notes?: string
-  pixPaid: boolean
 }
 
 export interface DashboardStats {
