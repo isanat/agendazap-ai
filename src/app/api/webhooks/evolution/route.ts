@@ -588,7 +588,6 @@ async function processIncomingMessage(
                   accountId: lidAccountId,
                   direction: 'outgoing',
                   status: 'sent',
-                  metadata: { contains: 'autoReply' }
                 },
                 orderBy: { createdAt: 'desc' },
                 take: 50,
@@ -609,7 +608,7 @@ async function processIncomingMessage(
               if (phoneEntries.length > 0) {
                 const mostUsedPhone = phoneEntries[0][0];
                 matchedClient = { id: '', name: pushName, phone: mostUsedPhone, whatsappPushName: pushName } as any;
-                console.log(`[Webhook] LID resolved via most-used phone in outgoing messages: ${mostUsedPhone} (${phoneEntries[0][1]} messages)`);
+                console.log(`[Webhook] LID resolved via most-used phone in outgoing messages: ${mostUsedPhone} (${phoneEntries[0][1]} messages, candidates: ${JSON.stringify(phoneEntries)})`);
               }
             }
             
