@@ -84,12 +84,12 @@ export async function GET(request: NextRequest) {
     // Get processed message stats (dedup)
     const processedCount = await db.processedMessage.count();
     const recentProcessed = await db.processedMessage.findMany({
-      orderBy: { createdAt: 'desc' },
+      orderBy: { processedAt: 'desc' },
       take: 5,
       select: {
         messageId: true,
         accountId: true,
-        createdAt: true,
+        processedAt: true,
         expiresAt: true,
       }
     });
