@@ -1099,8 +1099,11 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ success: true });
   } catch (error) {
-    console.error('[Webhook] Error:', error);
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const errorStack = error instanceof Error ? error.stack?.substring(0, 500) : undefined;
+    console.error('[Webhook] Error:', errorMessage);
+    if (errorStack) console.error('[Webhook] Stack:', errorStack);
+    return NextResponse.json({ error: 'Internal server error', details: errorMessage }, { status: 500 });
   }
 }
 
