@@ -365,9 +365,9 @@ export async function trackTokenUsage(
  * Optimized for Vercel serverless: limited fallback chain with fast timeouts
  * 
  * Strategy:
- * 1. Try Z.ai platform API with 2 model fallbacks (fastest, 15s timeout each)
- * 2. If platform fails, try direct Zhipu AI API with 2 model fallbacks (10s timeout each)
- * 3. Total worst case: ~4 attempts × ~15s = ~60s (but Vercel max is 30s so we need to be fast)
+ * 1. Try Z.ai platform API (uses ZAI_BASE_URL/ZAI_API_KEY or falls back to ZHIPU_API_KEY)
+ * 2. If platform fails, try direct Zhipu AI API with ZHIPU_API_KEY
+ * 3. Quick timeouts to avoid Vercel function timeout (15s per model, 20s budget per method)
  * 
  * Skip ZAI SDK method entirely - it doesn't work on Vercel (read-only filesystem)
  */
@@ -375,40 +375,103 @@ async function callZhipuAI(
   messages: ChatMessage[],
   model: string = 'glm-4-air'
 ): Promise<{ content: string; inputTokens: number; outputTokens: number }> {
-  // Only try 2-3 models max to stay within Vercel's 30s function timeout
-  // glm-4-air is the most reliable/available model on Zhipu AI
+  // Only try 2-3 models max to stay within Vercel's function timeout
   const modelFallbacks = [model, 'glm-4-air', 'glm-4-flash'];
   
   console.log(`[AI] callZhipuAI: Starting with requested model: ${model}, fallbacks: ${modelFallbacks.join(', ')}`);
   const startTime = Date.now();
   
-  // Method 1: Try Z.ai platform API (direct HTTP with X-Z-AI-From header)
-  // This is the primary method and should work if env vars are set
-  for (const tryModel of modelFallbacks) {
-    const elapsed = Date.now() - startTime;
-    if (elapsed > 20000) {
-      // If we've already spent 20s, skip remaining model attempts to leave time for Groq fallback
-      console.log(`[AI] Skipping remaining Z.ai platform attempts (elapsed: ${elapsed}ms > 20s budget)`);
-      break;
+  // Method 1: Try Z.ai platform API
+  // Uses ZAI_BASE_URL/ZAI_API_KEY, or ZHIPU_API_URL/ZHIPU_API_KEY as fallback
+  // The Z.ai platform API format is: POST {baseUrl}/chat/completions with X-Z-AI-From header
+  const zaiBaseUrl = process.env.ZAI_BASE_URL;
+  const zaiApiKey = process.env.ZAI_API_KEY;
+  
+  // If ZAI_BASE_URL is not set, try using ZHIPU_API_URL as the base URL
+  // This works if the ZHIPU_API_KEY is actually a Zhipu AI JWT token
+  const platformBaseUrl = zaiBaseUrl || (ZHIPU_API_KEY ? ZHIPU_API_URL : null);
+  const platformApiKey = zaiApiKey || ZHIPU_API_KEY || null;
+  
+  if (platformBaseUrl && platformApiKey) {
+    for (const tryModel of modelFallbacks) {
+      const elapsed = Date.now() - startTime;
+      if (elapsed > 20000) {
+        console.log(`[AI] Skipping remaining platform API attempts (elapsed: ${elapsed}ms > 20s budget)`);
+        break;
+      }
+      
+      console.log(`[AI] Trying platform API at ${platformBaseUrl} with model: ${tryModel}`);
+      
+      try {
+        const headers: Record<string, string> = {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${platformApiKey}`,
+        };
+        
+        // Only add X-Z-AI-From header if using Z.ai platform (not direct Zhipu)
+        if (zaiBaseUrl) {
+          headers['X-Z-AI-From'] = 'Z';
+        }
+        
+        const response = await fetch(`${platformBaseUrl}/chat/completions`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            model: tryModel,
+            messages: messages.map(m => ({
+              role: m.role,
+              content: m.content
+            })),
+            max_tokens: 1024,
+            temperature: 0.7,
+            ...(zaiBaseUrl ? { thinking: { type: 'disabled' } } : {}),
+          }),
+          signal: AbortSignal.timeout(15000)
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          const errorShort = errorText.substring(0, 200);
+          
+          // If model not found (error 1211), try next model
+          if (errorText.includes('"1211"') || errorText.includes('模型不存在') || errorText.includes('model_not_found')) {
+            console.log(`[AI] Platform model ${tryModel} not found (1211), trying next...`);
+            continue;
+          }
+          
+          console.error(`[AI] Platform API error: ${response.status} - ${errorShort}`);
+          continue; // Try next model
+        }
+
+        const data = await response.json();
+        console.log(`[AI] ✅ Platform API succeeded with model: ${tryModel} (${Date.now() - startTime}ms total)`);
+        
+        return {
+          content: data.choices?.[0]?.message?.content || '',
+          inputTokens: data.usage?.prompt_tokens || 0,
+          outputTokens: data.usage?.completion_tokens || 0
+        };
+      } catch (err: any) {
+        if (err?.name === 'TimeoutError' || String(err).includes('abort')) {
+          console.log(`[AI] Platform API timeout for model ${tryModel}`);
+        } else {
+          console.error(`[AI] Platform API error for model ${tryModel}:`, err?.message || err);
+        }
+        continue;
+      }
     }
-    
-    const zaiResult = await callZaiPlatform(messages, tryModel);
-    if (zaiResult) {
-      console.log(`[AI] Z.ai platform call succeeded with model: ${tryModel} (${Date.now() - startTime}ms total)`);
-      return zaiResult;
-    }
-    console.log(`[AI] Z.ai platform model ${tryModel} failed, trying next...`);
+  } else {
+    console.log('[AI] No platform API credentials available (ZAI_BASE_URL/ZAI_API_KEY and ZHIPU_API_KEY not set)');
   }
   
-  // Method 2: Direct Zhipu AI API call with model fallback
-  // Skip ZAI SDK (doesn't work on Vercel due to read-only filesystem)
+  // Method 2: Direct Zhipu AI API call with API key from environment or database
   const elapsedAfterPlatform = Date.now() - startTime;
   if (elapsedAfterPlatform > 20000) {
     console.log(`[AI] Skipping direct Zhipu API (elapsed: ${elapsedAfterPlatform}ms > 20s budget), will fall through to Groq`);
-    throw new Error(`Z.ai platform failed after ${elapsedAfterPlatform}ms, no time for direct API fallback`);
+    throw new Error(`Platform API failed after ${elapsedAfterPlatform}ms, no time for direct API fallback`);
   }
   
-  console.log('[AI] Z.ai platform failed, trying direct Zhipu AI API');
+  console.log('[AI] Platform API failed or unavailable, trying direct Zhipu AI API');
   
   // Get API key from environment or database
   let apiKey = ZHIPU_API_KEY;
@@ -419,12 +482,13 @@ async function callZhipuAI(
     const zaiProvider = providers.find(p => p.name.toLowerCase() === 'zai');
     if (zaiProvider?.apiKey) {
       apiKey = zaiProvider.apiKey;
+      console.log('[AI] Using API key from database (ZAI provider)');
     }
   }
   
   if (!apiKey) {
     console.log('[AI] No Zhipu API key available, skipping direct API call');
-    throw new Error('Zhipu AI API key not configured and Z.ai platform unavailable');
+    throw new Error('Zhipu AI API key not configured and platform API unavailable');
   }
   
   // Only try 2 models via direct API (to stay within time budget)
@@ -455,23 +519,22 @@ async function callZhipuAI(
           max_tokens: 1024,
           temperature: 0.7
         }),
-        signal: AbortSignal.timeout(10000) // 10s timeout for direct API (faster fail)
+        signal: AbortSignal.timeout(10000)
       });
 
       if (!response.ok) {
         const errorText = await response.text();
         const errorShort = errorText.substring(0, 200);
-        // If model not found (error 1211), try next model
         if (errorText.includes('"1211"') || errorText.includes('模型不存在')) {
           console.log(`[AI] Direct Zhipu model ${tryModel} not found (1211), trying next...`);
           continue;
         }
         console.error(`[AI] Direct Zhipu API error: ${response.status} - ${errorShort}`);
-        continue; // Don't throw, try next model or fall through to Groq
+        continue;
       }
 
       const data = await response.json();
-      console.log(`[AI] Direct Zhipu AI succeeded with model: ${tryModel} (${Date.now() - startTime}ms total)`);
+      console.log(`[AI] ✅ Direct Zhipu AI succeeded with model: ${tryModel} (${Date.now() - startTime}ms total)`);
       
       return {
         content: data.choices[0]?.message?.content || '',
@@ -484,7 +547,7 @@ async function callZhipuAI(
         continue;
       }
       console.error(`[AI] Direct Zhipu API error for model ${tryModel}:`, err?.message || err);
-      continue; // Don't throw, let it fall through to Groq
+      continue;
     }
   }
   
