@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { serialize } from 'cookie';
 import { compare } from 'bcryptjs';
+import { generateAccessToken, generateRefreshToken } from '@/lib/jwt';
 
 export async function POST(request: NextRequest) {
   try {
@@ -37,7 +38,6 @@ export async function POST(request: NextRequest) {
     }
 
     // Detect legacy hash (simpleHash produces base64/hex strings that don't start with $2)
-    // Bcrypt hashes always start with $2a$, $2b$, or $2y$
     const isLegacyHash = !user.password.startsWith('$2');
 
     if (isLegacyHash) {
@@ -51,9 +51,7 @@ export async function POST(request: NextRequest) {
           data: { password: hashedPassword }
         });
         console.log('[Login] Superadmin password migrated successfully!');
-        // Continue with normal login flow
       } else {
-        // For security, require password reset for other legacy hashes
         console.warn(`[Login] User ${user.email} has legacy password hash - password reset required`);
         return NextResponse.json(
           { 
@@ -80,11 +78,10 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Use updatedUser for session
     const sessionUser = updatedUser!;
 
-    // Create session data
-    const sessionData = JSON.stringify({
+    // Generate JWT access token
+    const accessToken = await generateAccessToken({
       userId: sessionUser.id,
       email: sessionUser.email,
       name: sessionUser.name,
@@ -92,21 +89,31 @@ export async function POST(request: NextRequest) {
       accountId: sessionUser.Account?.id || null,
     });
 
-    // Encode session
-    const encodedSession = Buffer.from(sessionData).toString('base64');
+    // Generate refresh token
+    const refreshToken = await generateRefreshToken(sessionUser.id);
 
-    // Set cookie
+    // Set cookies
     const isProduction = process.env.NODE_ENV === 'production';
     
-    const cookie = serialize('agendazap_session', encodedSession, {
+    // Access token cookie (short-lived, 15 minutes)
+    const accessTokenCookie = serialize('agendazap_session', accessToken, {
+      httpOnly: true,
+      secure: isProduction,
+      sameSite: 'lax',
+      maxAge: 60 * 15, // 15 minutes
+      path: '/',
+    });
+
+    // Refresh token cookie (long-lived, 7 days)
+    const refreshTokenCookie = serialize('agendazap_refresh_token', refreshToken, {
       httpOnly: true,
       secure: isProduction,
       sameSite: 'lax',
       maxAge: 60 * 60 * 24 * 7, // 7 days
-      path: '/',
+      path: '/api/auth', // Only accessible by auth routes for security
     });
     
-    console.log('[Login] Setting cookie for user:', sessionUser.email, 'isProduction:', isProduction);
+    console.log('[Login] Setting JWT cookies for user:', sessionUser.email, 'isProduction:', isProduction);
 
     return NextResponse.json(
       {
@@ -120,7 +127,7 @@ export async function POST(request: NextRequest) {
         },
       },
       {
-        headers: { 'Set-Cookie': cookie },
+        headers: { 'Set-Cookie': `${accessTokenCookie}, ${refreshTokenCookie}` },
       }
     );
   } catch (error) {
@@ -138,11 +145,10 @@ export async function POST(request: NextRequest) {
 // Get current session
 export async function GET(request: NextRequest) {
   try {
-    // Try cookie-based session first
+    // Try JWT cookie-based session first
     const cookieHeader = request.headers.get('cookie');
 
     if (cookieHeader) {
-      // Parse cookies correctly - handle values that may contain '='
       const cookies: Record<string, string> = {};
       cookieHeader.split(';').forEach(cookie => {
         const trimmed = cookie.trim();
@@ -157,28 +163,78 @@ export async function GET(request: NextRequest) {
       const sessionCookie = cookies['agendazap_session'];
       if (sessionCookie) {
         try {
-          const decoded = Buffer.from(sessionCookie, 'base64').toString();
-          const sessionData = JSON.parse(decoded);
+          // Import JWT verification
+          const { verifyAccessToken } = await import('@/lib/jwt');
+          const payload = await verifyAccessToken(sessionCookie);
 
-          // Verify user still exists and is active
-          const user = await db.user.findUnique({
-            where: { id: sessionData.userId },
-            include: { Account: true }
-          });
-
-          if (user && user.isActive) {
-            return NextResponse.json({
-              user: {
-                id: user.id,
-                email: user.email,
-                name: user.name,
-                role: user.role,
-                accountId: user.Account?.id || null,
-              },
+          if (payload) {
+            // Verify user still exists and is active
+            const user = await db.user.findUnique({
+              where: { id: payload.userId },
+              include: { Account: true }
             });
+
+            if (user && user.isActive) {
+              return NextResponse.json({
+                user: {
+                  id: user.id,
+                  email: user.email,
+                  name: user.name,
+                  role: user.role,
+                  accountId: user.Account?.id || null,
+                },
+              });
+            }
+          }
+
+          // Access token expired - try refresh
+          const refreshToken = cookies['agendazap_refresh_token'];
+          if (refreshToken) {
+            const { rotateRefreshToken, generateAccessToken: genAccess } = await import('@/lib/jwt');
+            const result = await rotateRefreshToken(refreshToken);
+            
+            if (result) {
+              const isProduction = process.env.NODE_ENV === 'production';
+              const accessTokenCookie = serialize('agendazap_session', result.accessToken, {
+                httpOnly: true,
+                secure: isProduction,
+                sameSite: 'lax',
+                maxAge: result.expiresIn,
+                path: '/',
+              });
+              const refreshTokenCookie = serialize('agendazap_refresh_token', result.refreshToken, {
+                httpOnly: true,
+                secure: isProduction,
+                sameSite: 'lax',
+                maxAge: 60 * 60 * 24 * 7,
+                path: '/api/auth',
+              });
+
+              const newPayload = await verifyAccessToken(result.accessToken);
+              if (newPayload) {
+                const user = await db.user.findUnique({
+                  where: { id: newPayload.userId },
+                  include: { Account: true }
+                });
+
+                if (user && user.isActive) {
+                  return NextResponse.json({
+                    user: {
+                      id: user.id,
+                      email: user.email,
+                      name: user.name,
+                      role: user.role,
+                      accountId: user.Account?.id || null,
+                    },
+                  }, {
+                    headers: { 'Set-Cookie': `${accessTokenCookie}, ${refreshTokenCookie}` },
+                  });
+                }
+              }
+            }
           }
         } catch {
-          // Invalid session cookie - fall through to header auth
+          // Invalid JWT token - fall through to header auth
         }
       }
     }
@@ -211,17 +267,73 @@ export async function GET(request: NextRequest) {
 }
 
 // Logout
-export async function DELETE() {
-  const cookie = serialize('agendazap_session', '', {
+export async function DELETE(request: NextRequest) {
+  // Get user ID from session to revoke refresh tokens
+  try {
+    const cookieHeader = request.headers.get('cookie');
+    if (cookieHeader) {
+      const cookies: Record<string, string> = {};
+      cookieHeader.split(';').forEach(cookie => {
+        const trimmed = cookie.trim();
+        const equalIndex = trimmed.indexOf('=');
+        if (equalIndex > 0) {
+          const key = trimmed.substring(0, equalIndex);
+          const value = trimmed.substring(equalIndex + 1);
+          cookies[key] = value;
+        }
+      });
+
+      const sessionCookie = cookies['agendazap_session'];
+      if (sessionCookie) {
+        const { verifyAccessToken, revokeAllRefreshTokens } = await import('@/lib/jwt');
+        const payload = await verifyAccessToken(sessionCookie);
+        if (payload) {
+          await revokeAllRefreshTokens(payload.userId);
+        }
+      }
+
+      // Also try to revoke via refresh token
+      const refreshToken = cookies['agendazap_refresh_token'];
+      if (refreshToken && !sessionCookie) {
+        const storedToken = await db.refreshToken.findUnique({
+          where: { token: refreshToken }
+        });
+        if (storedToken) {
+          await revokeAllRefreshTokensImport(storedToken.userId);
+        }
+      }
+    }
+  } catch (error) {
+    console.error('[Logout] Error revoking tokens:', error);
+  }
+
+  const isProduction = process.env.NODE_ENV === 'production';
+
+  // Clear both cookies
+  const accessTokenCookie = serialize('agendazap_session', '', {
     httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
+    secure: isProduction,
     sameSite: 'lax',
     maxAge: -1,
     path: '/',
   });
 
+  const refreshTokenCookie = serialize('agendazap_refresh_token', '', {
+    httpOnly: true,
+    secure: isProduction,
+    sameSite: 'lax',
+    maxAge: -1,
+    path: '/api/auth',
+  });
+
   return NextResponse.json(
     { success: true },
-    { headers: { 'Set-Cookie': cookie } }
+    { headers: { 'Set-Cookie': `${accessTokenCookie}, ${refreshTokenCookie}` } }
   );
+}
+
+// Helper to avoid circular import
+async function revokeAllRefreshTokensImport(userId: string) {
+  const { revokeAllRefreshTokens } = await import('@/lib/jwt');
+  await revokeAllRefreshTokens(userId);
 }

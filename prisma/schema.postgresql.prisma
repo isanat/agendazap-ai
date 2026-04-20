@@ -522,6 +522,20 @@ model User {
   AuditLog     AuditLog[]
   Professional Professional[]
   Client       Client?        @relation(fields: [clientId], references: [id])
+  RefreshToken RefreshToken[]
+}
+
+model RefreshToken {
+  id          String   @id @default(cuid())
+  token       String   @unique
+  userId      String
+  expiresAt   DateTime
+  isRevoked   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  User        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
 }
 
 model WhatsappMessage {

@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server';
 import { db } from '@/lib/db';
+import { verifyAccessToken } from '@/lib/jwt';
 
 export interface AuthUser {
   id: string;
@@ -10,18 +11,13 @@ export interface AuthUser {
 }
 
 /**
- * Parse session cookie from request
+ * Parse JWT session cookie from request
  */
-function parseSessionCookie(request: NextRequest): { userId: string; email: string; name: string; role: string; accountId: string | null } | null {
+async function parseJwtSession(request: NextRequest): Promise<AuthUser | null> {
   try {
-    // Get the cookie from the request headers
     const cookieHeader = request.headers.get('cookie');
+    if (!cookieHeader) return null;
 
-    if (!cookieHeader) {
-      return null;
-    }
-
-    // Parse cookies - handle values that may contain '='
     const cookies: Record<string, string> = {};
     cookieHeader.split(';').forEach(cookie => {
       const trimmed = cookie.trim();
@@ -34,31 +30,18 @@ function parseSessionCookie(request: NextRequest): { userId: string; email: stri
     });
 
     const sessionCookie = cookies['agendazap_session'];
+    if (!sessionCookie) return null;
 
-    if (!sessionCookie) {
-      return null;
+    // Try JWT verification first
+    const payload = await verifyAccessToken(sessionCookie);
+    if (payload) {
+      return payload;
     }
 
-    // Decode session data from base64
-    const decoded = Buffer.from(sessionCookie, 'base64').toString('utf-8');
-
-    // Validate decoded content before parsing
-    if (!decoded || decoded.length === 0) {
-      return null;
-    }
-
-    const sessionData = JSON.parse(decoded);
-
-    // Validate required fields
-    if (!sessionData?.userId) {
-      return null;
-    }
-
-    return sessionData;
+    return null;
   } catch (error) {
-    // Log only in development, not in production (avoids noise in logs)
     if (process.env.NODE_ENV !== 'production') {
-      console.warn('[Auth] Could not parse session cookie:', error instanceof Error ? error.message : 'Unknown');
+      console.warn('[Auth] Could not verify JWT session:', error instanceof Error ? error.message : 'Unknown');
     }
     return null;
   }
@@ -67,9 +50,8 @@ function parseSessionCookie(request: NextRequest): { userId: string; email: stri
 /**
  * Parse authorization header (fallback for localStorage-based auth)
  */
-function parseAuthHeader(request: NextRequest): { userId: string; email: string; name: string; role: string; accountId: string | null } | null {
+function parseAuthHeader(request: NextRequest): AuthUser | null {
   try {
-    // Check for X-User-Id header (sent from frontend localStorage)
     const userId = request.headers.get('x-user-id');
     const userEmail = request.headers.get('x-user-email');
     const userName = request.headers.get('x-user-name');
@@ -77,9 +59,8 @@ function parseAuthHeader(request: NextRequest): { userId: string; email: string;
     const accountId = request.headers.get('x-account-id');
 
     if (userId) {
-      console.log('[Auth] Auth header found for user:', userEmail);
       return {
-        userId,
+        id: userId,
         email: userEmail || '',
         name: userName || '',
         role: userRole || 'owner',
@@ -96,39 +77,50 @@ function parseAuthHeader(request: NextRequest): { userId: string; email: string;
 
 /**
  * Unified authentication helper for API routes
- * Uses the custom session cookie (agendazap_session) or auth headers
+ * Uses JWT session cookie or auth headers
  */
 export async function getAuthUser(request: NextRequest): Promise<AuthUser | null> {
   try {
-    // Try cookie-based auth first
-    let sessionData = parseSessionCookie(request);
-    
+    // Try JWT cookie-based auth first
+    const jwtUser = await parseJwtSession(request);
+    if (jwtUser) {
+      // Verify user still exists and is active
+      const user = await db.user.findUnique({
+        where: { id: jwtUser.id },
+        include: { Account: true }
+      });
+
+      if (user && user.isActive) {
+        return {
+          id: user.id,
+          email: user.email,
+          name: user.name,
+          role: user.role,
+          accountId: user.Account?.id || null,
+        };
+      }
+    }
+
     // Fallback to header-based auth
-    if (!sessionData) {
-      sessionData = parseAuthHeader(request);
-    }
-    
-    if (!sessionData?.userId) {
-      return null;
+    const headerUser = parseAuthHeader(request);
+    if (headerUser) {
+      const user = await db.user.findUnique({
+        where: { id: headerUser.id },
+        include: { Account: true }
+      });
+
+      if (user && user.isActive) {
+        return {
+          id: user.id,
+          email: user.email,
+          name: user.name,
+          role: user.role,
+          accountId: user.Account?.id || null,
+        };
+      }
     }
 
-    // Verify user still exists and is active
-    const user = await db.user.findUnique({
-      where: { id: sessionData.userId },
-      include: { Account: true }
-    });
-
-    if (!user || !user.isActive) {
-      return null;
-    }
-
-    return {
-      id: user.id,
-      email: user.email,
-      name: user.name,
-      role: user.role,
-      accountId: user.Account?.id || null,
-    };
+    return null;
   } catch (error) {
     console.error('Auth helper error:', error);
     return null;
@@ -150,25 +142,22 @@ export async function hasAccountAccess(request: NextRequest, accountId: string):
   const user = await getAuthUser(request);
   if (!user) return false;
   
-  // Superadmin has access to all accounts
   if (user.role === 'superadmin') return true;
   
-  // Check if user belongs to the account
   return user.accountId === accountId;
 }
 
 /**
  * Get user ID from session without database lookup
- * Faster when you just need the ID
  */
-export function getUserIdFromSession(request: NextRequest): string | null {
-  const sessionData = parseSessionCookie(request);
-  return sessionData?.userId || null;
+export async function getUserIdFromSession(request: NextRequest): Promise<string | null> {
+  const jwtUser = await parseJwtSession(request);
+  return jwtUser?.id || null;
 }
 
 /**
  * Get session data from cookie without database lookup
  */
-export function getSessionData(request: NextRequest): { userId: string; email: string; name: string; role: string; accountId: string | null } | null {
-  return parseSessionCookie(request);
+export async function getSessionData(request: NextRequest): Promise<AuthUser | null> {
+  return parseJwtSession(request);
 }
