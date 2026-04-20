@@ -5,9 +5,13 @@ import { generateSystemPrompt, findOrCreateClient, detectNameInMessage, updateCl
 
 /**
  * Verify webhook request authenticity
- * Checks for Evolution API key or custom webhook secret
+ * Checks multiple authentication methods:
+ * 1. Custom webhook secret header (x-webhook-secret)
+ * 2. Evolution API global key header (apikey)
+ * 3. Instance-level API key from Integration records in DB
+ * 4. If no EVOLUTION_WEBHOOK_SECRET is set, skip verification (backward compatible)
  */
-function verifyWebhookRequest(request: NextRequest): boolean {
+async function verifyWebhookRequest(request: NextRequest): Promise<boolean> {
   const webhookSecret = process.env.EVOLUTION_WEBHOOK_SECRET;
   
   // If no webhook secret is configured, skip verification (backward compatible)
@@ -15,17 +19,66 @@ function verifyWebhookRequest(request: NextRequest): boolean {
     return true;
   }
   
-  // Check custom webhook secret header
+  // Method 1: Check custom webhook secret header (set when webhook is configured with headers)
   const providedSecret = request.headers.get('x-webhook-secret');
-  if (providedSecret === webhookSecret) {
+  if (providedSecret && providedSecret === webhookSecret) {
+    console.log('[Webhook] Authenticated via x-webhook-secret header');
     return true;
   }
   
-  // Check Evolution API key header (alternative method)
+  // Method 2: Check Evolution API global key header
   const apikey = request.headers.get('apikey');
-  if (apikey === process.env.EVOLUTION_API_KEY) {
+  const globalApiKey = process.env.EVOLUTION_API_KEY;
+  if (apikey && globalApiKey && apikey === globalApiKey) {
+    console.log('[Webhook] Authenticated via global apikey header');
     return true;
   }
+  
+  // Method 3: Check instance-level API key from Integration records
+  // Evolution API sends per-instance API keys that may differ from the global key
+  if (apikey) {
+    try {
+      const integrations = await db.integration.findMany({
+        where: { type: 'whatsapp' },
+        select: { credentials: true }
+      });
+      
+      for (const integration of integrations) {
+        try {
+          const credentials = typeof integration.credentials === 'string'
+            ? JSON.parse(integration.credentials)
+            : integration.credentials;
+          
+          if (credentials.apiKey && credentials.apiKey === apikey) {
+            console.log('[Webhook] Authenticated via instance-level apikey header');
+            return true;
+          }
+        } catch {
+          // Skip invalid credentials
+        }
+      }
+    } catch (dbError) {
+      console.error('[Webhook] Error checking instance API keys:', dbError);
+    }
+  }
+  
+  // Method 4: Check Authorization header (Bearer token)
+  const authHeader = request.headers.get('authorization');
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const token = authHeader.substring(7);
+    if (token === webhookSecret || token === globalApiKey) {
+      console.log('[Webhook] Authenticated via Authorization Bearer header');
+      return true;
+    }
+  }
+  
+  // Log all received headers for debugging
+  const headerKeys: string[] = [];
+  request.headers.forEach((_value, key) => {
+    headerKeys.push(key);
+  });
+  console.warn(`[Webhook] Authentication failed. Received headers: ${headerKeys.join(', ')}`);
+  console.warn(`[Webhook] hasXWebhookSecret: ${!!providedSecret}, hasApikey: ${!!apikey}, hasAuthHeader: ${!!authHeader}`);
   
   return false;
 }
@@ -757,54 +810,111 @@ async function updateConnectionStatus(instanceName: string, state: string): Prom
   });
 }
 
+/**
+ * Check if a request body looks like a legitimate Evolution API webhook event.
+ * This is used as a fallback authentication method when the webhook secret
+ * header isn't configured on the Evolution API side yet.
+ * 
+ * A legitimate Evolution API event has:
+ * - An "event" field with a known event type
+ * - An "instance" field with a valid instance name
+ * - Optional "data" field with event-specific data
+ */
+function isValidEvolutionApiEvent(body: unknown): boolean {
+  if (!body || typeof body !== 'object') return false;
+  const obj = body as Record<string, unknown>;
+  
+  // Must have an event field
+  if (!obj.event || typeof obj.event !== 'string') return false;
+  
+  // Must have an instance field
+  if (!obj.instance || typeof obj.instance !== 'string') return false;
+  
+  // Event must be a known Evolution API event type
+  const knownEvents = [
+    'APPLICATION_STARTUP',
+    'QRCODE_UPDATED',
+    'CONNECTION_UPDATE',
+    'MESSAGES_UPSERT',
+    'MESSAGES_UPDATE',
+    'SEND_MESSAGE',
+    'messages.upsert',
+    'connection.update',
+    'qrcode.updated',
+    'application.startup',
+  ];
+  
+  return knownEvents.includes(obj.event);
+}
+
 // POST - Handle webhook from Evolution API
 export async function POST(request: NextRequest) {
-  // Verify webhook authenticity
-  if (!verifyWebhookRequest(request)) {
-    console.warn('[Webhook] Unauthorized request - invalid or missing webhook secret');
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  // Step 1: Try header-based authentication
+  const isHeaderAuth = await verifyWebhookRequest(request);
+  
+  // Step 2: Parse the request body
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    console.warn('[Webhook] Failed to parse request body');
+    return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
+  }
+  
+  // Step 3: If header auth failed, check if the body looks like a legitimate Evolution API event
+  // This is a fallback for when the webhook secret header hasn't been configured on Evolution API yet
+  if (!isHeaderAuth) {
+    if (isValidEvolutionApiEvent(body)) {
+      console.warn('[Webhook] ⚠️ Header auth failed, but request body is a valid Evolution API event. Processing anyway - please configure webhook headers on Evolution API for proper security.');
+      console.warn('[Webhook] ⚠️ Use the /api/integrations/whatsapp/reconfigure-webhook endpoint to add the x-webhook-secret header.');
+    } else {
+      // Not a valid Evolution API event and no auth header - reject
+      console.warn('[Webhook] Unauthorized request - invalid webhook secret AND not a valid Evolution API event');
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
   }
 
   try {
-    const body = await request.json();
-    const event = body.event || '';
+    const webhookBody = body as { event?: string; instance?: string; data?: unknown };
+    const event = webhookBody.event || '';
 
     // Enhanced logging for message events - helps debug LID and phone issues
     if (event === 'MESSAGES_UPSERT' || event === 'messages.upsert') {
-      const jid = body.data?.key?.remoteJid || 'unknown';
-      const fromMe = body.data?.key?.fromMe || false;
-      const pushName = body.data?.pushName || 'unknown';
-      const hasText = !!(body.data?.message?.conversation || body.data?.message?.extendedTextMessage?.text);
-      const hasAudio = !!body.data?.message?.audioMessage;
-      const hasImage = !!body.data?.message?.imageMessage;
+      const webhookData = webhookBody as EvolutionWebhookData;
+      const jid = webhookData.data?.key?.remoteJid || 'unknown';
+      const fromMe = webhookData.data?.key?.fromMe || false;
+      const pushName = webhookData.data?.pushName || 'unknown';
+      const hasText = !!(webhookData.data?.message?.conversation || webhookData.data?.message?.extendedTextMessage?.text);
+      const hasAudio = !!webhookData.data?.message?.audioMessage;
+      const hasImage = !!webhookData.data?.message?.imageMessage;
       
       console.log(`[Webhook] 📨 Message event - JID: ${jid}, fromMe: ${fromMe}, pushName: ${pushName}, text: ${hasText}, audio: ${hasAudio}, image: ${hasImage}`);
       
       // Log JID format for debugging LID issues
       if (jid.includes('@lid')) {
-        console.log(`[Webhook] 🔍 LID format detected in incoming message. Full data key: ${JSON.stringify(body.data?.key)}`);
+        console.log(`[Webhook] 🔍 LID format detected in incoming message. Full data key: ${JSON.stringify(webhookData.data?.key)}`);
       }
       
       // Also log the participant field if present (may contain real phone for LID messages)
-      if (body.data?.key?.participant) {
-        console.log(`[Webhook] 🔍 Participant field present: ${body.data.key.participant}`);
+      if (webhookData.data?.key?.participant) {
+        console.log(`[Webhook] 🔍 Participant field present: ${webhookData.data.key.participant}`);
       }
     }
 
     switch (event) {
       case 'MESSAGES_UPSERT':
       case 'messages.upsert':
-        await processIncomingMessage(body.instance, body);
+        await processIncomingMessage(webhookBody.instance!, webhookBody as EvolutionWebhookData);
         break;
 
       case 'CONNECTION_UPDATE':
       case 'connection.update':
-        await updateConnectionStatus(body.instance, body.data?.state);
+        await updateConnectionStatus(webhookBody.instance || '', (webhookBody as { data?: { state?: string } }).data?.state || '');
         break;
 
       case 'QRCODE_UPDATED':
       case 'qrcode.updated':
-        console.log(`[Webhook] QR Code updated for: ${body.instance}`);
+        console.log(`[Webhook] QR Code updated for: ${webhookBody.instance}`);
         break;
 
       default:

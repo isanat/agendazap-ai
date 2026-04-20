@@ -96,6 +96,9 @@ export async function POST(request: NextRequest) {
             enabled: true,
             byEvents: false,
             base64: true,
+            headers: process.env.EVOLUTION_WEBHOOK_SECRET
+              ? { 'x-webhook-secret': process.env.EVOLUTION_WEBHOOK_SECRET }
+              : undefined,
             events: [
               'APPLICATION_STARTUP',
               'QRCODE_UPDATED',
