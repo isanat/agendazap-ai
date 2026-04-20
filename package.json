@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev -p 3000 2>&1 | tee dev.log",
-    "build": "cp prisma/schema.postgresql.prisma prisma/schema.prisma && prisma generate && prisma db push --accept-data-loss && next build && cp -r .next/static .next/standalone/.next/ && cp -r public .next/standalone/",
+    "build": "cp prisma/schema.postgresql.prisma prisma/schema.prisma && prisma generate && prisma migrate deploy && next build && cp -r .next/static .next/standalone/.next/ && cp -r public .next/standalone/",
     "start": "NODE_ENV=production bun .next/standalone/server.js 2>&1 | tee server.log",
     "lint": "eslint .",
     "postinstall": "prisma generate",
@@ -12,7 +12,7 @@
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:reset": "prisma migrate reset",
-    "db:neon:push": "cp prisma/schema.postgresql.prisma prisma/schema.prisma && prisma generate && prisma db push --accept-data-loss",
+    "db:neon:push": "cp prisma/schema.postgresql.prisma prisma/schema.prisma && prisma generate && prisma migrate deploy",
     "db:neon:setup": "bun run scripts/deploy-neon.sh"
   },
   "dependencies": {

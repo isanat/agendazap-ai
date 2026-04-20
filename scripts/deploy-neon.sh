@@ -1,6 +1,7 @@
 #!/bin/bash
 # ============================================
 # AgendaZap - Database Migration Script for Neon
+# Uses prisma migrate for versioned migrations
 # ============================================
 
 echo "🚀 AgendaZap - Neon PostgreSQL Migration"
@@ -31,16 +32,14 @@ echo "📋 Step 2: Generating Prisma Client..."
 bunx prisma generate
 
 echo ""
-echo "📋 Step 3: Pushing schema to Neon database..."
-bunx prisma db push --accept-data-loss
+echo "📋 Step 3: Deploying migrations to Neon database..."
+bunx prisma migrate deploy
 
 echo ""
 echo "✅ Migration complete!"
 echo ""
 echo "📝 Next steps:"
 echo "   1. Configure OAuth credentials in Vercel:"
-echo "      - GOOGLE_CLIENT_ID"
-echo "      - GOOGLE_CLIENT_SECRET"
 echo "      - MP_CLIENT_ID"
 echo "      - MP_CLIENT_SECRET"
 echo ""
