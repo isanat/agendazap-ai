@@ -543,123 +543,49 @@ async function processIncomingMessage(
     try {
       // Find the account ID first (needed for database lookups)
       const lidAccountId = await findAccountByInstance(instanceName);
-      
       const lidValue = phone.replace('lid:', '');
+      
       if (lidAccountId) {
-        // Try Evolution API resolution first (most reliable)
+        // Method 1: Try Evolution API resolution (most reliable)
         const resolvedPhone = await resolveLidToPhone(instanceName, phone);
-        if (resolvedPhone) {
+        if (resolvedPhone && /^\d{10,15}$/.test(resolvedPhone)) {
           phone = resolvedPhone;
           console.log(`[Webhook] LID resolved via Evolution API to: ${phone}`);
         } else {
-          // Try database: find client by push name or client name
-          const pushName = data.pushName;
-          if (pushName) {
-            // Load ALL clients for this account and filter in code
-            // This avoids Prisma query compatibility issues
-            const allClients = await db.client.findMany({
-              where: { accountId: lidAccountId },
-              select: { id: true, name: true, phone: true, whatsappPushName: true }
-            });
-            
-            // Find a client with a non-LID phone that matches by:
-            // 1. Exact whatsappPushName match
-            // 2. Name contains pushName (case-insensitive in code)
-            // 3. Any client with a valid real phone number (last resort - use most recent)
-            let matchedClient = allClients.find(c => 
-              !c.phone.startsWith('lid:') && 
-              /^\d{10,15}$/.test(c.phone) &&
-              c.whatsappPushName === pushName
-            );
-            
-            if (!matchedClient) {
-              matchedClient = allClients.find(c => 
-                !c.phone.startsWith('lid:') && 
-                /^\d{10,15}$/.test(c.phone) &&
-                c.name && c.name.toLowerCase().includes(pushName.toLowerCase())
-              );
+          // Method 2: Look at ALL outgoing messages that were successfully sent
+          // Find the phone number with the most successful deliveries
+          const sentMessages = await db.whatsappMessage.findMany({
+            where: {
+              accountId: lidAccountId,
+              direction: 'outgoing',
+              status: 'sent',
+            },
+            select: { clientPhone: true }
+          });
+          
+          // Count frequency and find the most common real phone number
+          const phoneFreq: Record<string, number> = {};
+          for (const msg of sentMessages) {
+            const p = msg.clientPhone;
+            if (p && !p.startsWith('lid:') && !p.includes('147102780940432') && /^\d{10,15}$/.test(p)) {
+              phoneFreq[p] = (phoneFreq[p] || 0) + 1;
             }
-            
-            if (!matchedClient) {
-              // Last resort: search outgoing messages for a successfully sent phone number
-              // Find the most frequently used real phone number (likely the main client)
-              const successfulMessages = await db.whatsappMessage.findMany({
-                where: {
-                  accountId: lidAccountId,
-                  direction: 'outgoing',
-                  status: 'sent',
-                },
-                orderBy: { createdAt: 'desc' },
-                take: 50,
-                select: { clientPhone: true }
-              });
-              
-              // Count frequency of each real phone number
-              const phoneCounts: Record<string, number> = {};
-              for (const msg of successfulMessages) {
-                const p = msg.clientPhone;
-                if (p && !p.startsWith('lid:') && /^\d{10,15}$/.test(p)) {
-                  phoneCounts[p] = (phoneCounts[p] || 0) + 1;
-                }
-              }
-              
-              // Use the most frequently used real phone number
-              const phoneEntries = Object.entries(phoneCounts).sort((a, b) => b[1] - a[1]);
-              if (phoneEntries.length > 0) {
-                const mostUsedPhone = phoneEntries[0][0];
-                matchedClient = { id: '', name: pushName, phone: mostUsedPhone, whatsappPushName: pushName } as any;
-                console.log(`[Webhook] LID resolved via most-used phone in outgoing messages: ${mostUsedPhone} (${phoneEntries[0][1]} messages, candidates: ${JSON.stringify(phoneEntries)})`);
-              }
-            }
-            
-            if (matchedClient) {
-              phone = matchedClient.phone;
-              console.log(`[Webhook] LID resolved via database match to: ${phone}`);
-              
-              // Update whatsappPushName for future matching
-              if (matchedClient.whatsappPushName !== pushName) {
-                try {
-                  await db.client.update({
-                    where: { id: matchedClient.id },
-                    data: { whatsappPushName: pushName }
-                  });
-                } catch (updateErr) {
-                  console.log(`[Webhook] Could not update whatsappPushName: ${updateErr instanceof Error ? updateErr.message : updateErr}`);
-                }
-              }
-              
-              // Also clean up duplicate LID clients
-              if (matchedClient.id) {
-                try {
-                  const lidClient = await db.client.findFirst({
-                    where: { accountId: lidAccountId, phone: { contains: lidValue } }
-                  });
-                  if (lidClient && lidClient.id !== matchedClient.id && lidClient.phone.startsWith('lid:')) {
-                    await db.client.delete({ where: { id: lidClient.id } });
-                    console.log(`[Webhook] Deleted duplicate LID client ${lidClient.id}`);
-                  }
-                } catch (cleanupErr) {
-                  console.log(`[Webhook] Could not cleanup LID client: ${cleanupErr instanceof Error ? cleanupErr.message : cleanupErr}`);
-                }
-              }
-            } else {
-              console.warn(`[Webhook] ⚠️ Could not resolve LID. JID: ${data.key?.remoteJid}, pushName: ${pushName}`);
-            }
-          } else {
-            console.warn(`[Webhook] ⚠️ Could not resolve LID. No pushName available.`);
           }
-        }
-      } else {
-        // No account found yet, try Evolution API resolution only
-        const resolvedPhone = await resolveLidToPhone(instanceName, phone);
-        if (resolvedPhone) {
-          phone = resolvedPhone;
-          console.log(`[Webhook] LID resolved via Evolution API to: ${phone}`);
+          
+          const sorted = Object.entries(phoneFreq).sort((a, b) => b[1] - a[1]);
+          console.log(`[Webhook] LID resolution candidates: ${JSON.stringify(sorted)}`);
+          
+          if (sorted.length > 0) {
+            phone = sorted[0][0];
+            console.log(`[Webhook] LID resolved via message frequency to: ${phone} (${sorted[0][1]} messages)`);
+          } else {
+            console.warn(`[Webhook] ⚠️ Could not resolve LID. No real phone found in sent messages.`);
+          }
         }
       }
     } catch (lidError) {
-      console.error(`[Webhook] Error during LID resolution:`, lidError);
-      // Don't fail the entire request - continue with the LID as phone
+      console.error(`[Webhook] Error during LID resolution: ${lidError instanceof Error ? lidError.message : lidError}`);
+      // Continue with the LID as phone - the message sending will likely fail but at least we won't crash
     }
   }
   
@@ -1166,7 +1092,13 @@ export async function POST(request: NextRequest) {
     const errorStack = error instanceof Error ? error.stack?.substring(0, 500) : undefined;
     console.error('[Webhook] Error:', errorMessage);
     if (errorStack) console.error('[Webhook] Stack:', errorStack);
-    return NextResponse.json({ error: 'Internal server error', details: errorMessage }, { status: 500 });
+    // Include more details for debugging LID issues
+    const errorDetails = {
+      message: errorMessage,
+      stack: errorStack,
+      phone: (body as any)?.data?.key?.remoteJid || 'unknown',
+    };
+    return NextResponse.json({ error: 'Internal server error', details: errorDetails }, { status: 500 });
   }
 }
 
