@@ -7,17 +7,42 @@ import { getAuthUser } from '@/lib/auth-helpers';
  * Mercado Pago OAuth Integration
  * 
  * Documentation: https://www.mercadopago.com.br/developers/en/docs/authentication/oauth
+ * 
+ * Supports credentials from:
+ * 1. Environment variables (MP_CLIENT_ID, MP_CLIENT_SECRET, MP_REDIRECT_URI)
+ * 2. SystemConfiguration table (mpClientId, mpClientSecret, mpRedirectUri)
  */
 
-// Mercado Pago OAuth configuration
-const MP_CONFIG = {
-  clientId: process.env.MP_CLIENT_ID || '',
-  clientSecret: process.env.MP_CLIENT_SECRET || '',
-  redirectUri: process.env.MP_REDIRECT_URI || '',
-  // Sandbox vs Production
-  baseUrl: process.env.MP_SANDBOX === 'true' 
-    ? 'https://auth.mercadopago.com.br' 
-    : 'https://auth.mercadopago.com',
+// Get Mercado Pago OAuth configuration from env vars or database
+async function getMPConfig() {
+  // First check environment variables
+  let clientId = process.env.MP_CLIENT_ID || '';
+  let clientSecret = process.env.MP_CLIENT_SECRET || '';
+  let redirectUri = process.env.MP_REDIRECT_URI || '';
+  
+  // If env vars are not set, check SystemConfiguration in database
+  if (!clientId || !clientSecret || !redirectUri) {
+    try {
+      const config = await db.systemConfiguration.findFirst();
+      if (config) {
+        clientId = clientId || config.mpClientId || '';
+        clientSecret = clientSecret || config.mpClientSecret || '';
+        redirectUri = redirectUri || config.mpRedirectUri || '';
+      }
+    } catch (err) {
+      console.error('[MP OAuth] Error reading SystemConfiguration:', err);
+    }
+  }
+  
+  return {
+    clientId,
+    clientSecret,
+    redirectUri,
+    // Sandbox vs Production
+    baseUrl: process.env.MP_SANDBOX === 'true' 
+      ? 'https://auth.mercadopago.com.br' 
+      : 'https://auth.mercadopago.com',
+  };
 }
 
 /**
@@ -35,11 +60,14 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Conta não encontrada' }, { status: 400 });
     }
 
+    const MP_CONFIG = await getMPConfig();
+
     // Check if Mercado Pago is configured
     if (!MP_CONFIG.clientId || !MP_CONFIG.clientSecret || !MP_CONFIG.redirectUri) {
       return NextResponse.json({
         error: 'Mercado Pago OAuth não configurado pelo administrador do sistema',
         setupRequired: true,
+        setupInstructions: 'O administrador precisa configurar as credenciais do Mercado Pago em Configurações do Sistema ou nas variáveis de ambiente (MP_CLIENT_ID, MP_CLIENT_SECRET, MP_REDIRECT_URI).',
       }, { status: 400 });
     }
     
@@ -64,6 +92,8 @@ export async function GET(request: NextRequest) {
     authUrl.searchParams.set('platform_id', 'mp');
     authUrl.searchParams.set('redirect_uri', MP_CONFIG.redirectUri);
     authUrl.searchParams.set('state', state);
+    
+    console.log(`[MP OAuth] Generated auth URL for account ${authUser.accountId}, redirect URI: ${MP_CONFIG.redirectUri}`);
     
     return NextResponse.json({
       authUrl: authUrl.toString(),

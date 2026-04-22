@@ -38,6 +38,8 @@ interface SystemConfig {
   evolutionApiAvailable: boolean;
   enableAiAssistant: boolean;
   enableMercadoPago: boolean;
+  mpConfigured: boolean;
+  mpConfigSource: string | null;
 }
 
 export function IntegrationsSettings() {
@@ -50,6 +52,11 @@ export function IntegrationsSettings() {
   const [pairingCode, setPairingCode] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [showMpSetup, setShowMpSetup] = useState(false);
+  const [mpClientId, setMpClientId] = useState('');
+  const [mpClientSecret, setMpClientSecret] = useState('');
+  const [mpRedirectUri, setMpRedirectUri] = useState('');
+  const [savingMpConfig, setSavingMpConfig] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -256,6 +263,46 @@ export function IntegrationsSettings() {
         description: 'Não foi possível desconectar',
         variant: 'destructive',
       });
+    }
+  };
+
+  const saveMpConfig = async () => {
+    setSavingMpConfig(true);
+    try {
+      const response = await authFetch('/api/integrations/system-config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mpClientId,
+          mpClientSecret,
+          mpRedirectUri: mpRedirectUri || `https://${window.location.hostname}/api/integrations/mercadopago/callback`,
+          enableMercadoPago: true,
+        }),
+      });
+
+      if (response.ok) {
+        toast({
+          title: 'Configuração salva!',
+          description: 'Credenciais do Mercado Pago configuradas com sucesso',
+        });
+        setShowMpSetup(false);
+        loadData();
+      } else {
+        const data = await response.json();
+        toast({
+          title: 'Erro',
+          description: data.error || 'Não foi possível salvar as configurações',
+          variant: 'destructive',
+        });
+      }
+    } catch {
+      toast({
+        title: 'Erro',
+        description: 'Erro ao conectar com o servidor',
+        variant: 'destructive',
+      });
+    } finally {
+      setSavingMpConfig(false);
     }
   };
 
@@ -467,7 +514,93 @@ export function IntegrationsSettings() {
           </div>
         </CardHeader>
         <CardContent>
-          {!systemConfig?.enableMercadoPago ? (
+          {!systemConfig?.mpConfigured ? (
+            <div className="space-y-4">
+              <div className="p-4 bg-amber-50 dark:bg-amber-950/20 rounded-lg border border-amber-200 dark:border-amber-800">
+                <p className="text-sm text-amber-800 dark:text-amber-200 font-medium mb-2">
+                  Mercado Pago precisa ser configurado
+                </p>
+                <p className="text-sm text-amber-700 dark:text-amber-300">
+                  Para conectar sua conta Mercado Pago, primeiro configure as credenciais da aplicação. 
+                  Você precisa criar uma aplicação no{' '}
+                  <a href="https://www.mercadopago.com.br/developers/panel/app" target="_blank" rel="noopener noreferrer" className="underline font-medium">
+                    Painel de Desenvolvedores do Mercado Pago
+                  </a>.
+                </p>
+              </div>
+              <Button variant="outline" onClick={() => setShowMpSetup(true)} className="w-full">
+                <CreditCard className="h-4 w-4 mr-2" />
+                Configurar Credenciais do Mercado Pago
+              </Button>
+              
+              <Dialog open={showMpSetup} onOpenChange={setShowMpSetup}>
+                <DialogContent className="sm:max-w-md">
+                  <DialogHeader>
+                    <DialogTitle>Configurar Mercado Pago</DialogTitle>
+                    <DialogDescription>
+                      Insira as credenciais da sua aplicação Mercado Pago. 
+                      Crie uma em{' '}
+                      <a href="https://www.mercadopago.com.br/developers/panel/app" target="_blank" rel="noopener noreferrer" className="underline">
+                        developers.mercadopago.com.br
+                      </a>
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="space-y-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="mpClientId">Client ID</Label>
+                      <Input
+                        id="mpClientId"
+                        placeholder="Ex: 1234567890"
+                        value={mpClientId}
+                        onChange={(e) => setMpClientId(e.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="mpClientSecret">Client Secret</Label>
+                      <Input
+                        id="mpClientSecret"
+                        type="password"
+                        placeholder="Ex: abc123XYZ789"
+                        value={mpClientSecret}
+                        onChange={(e) => setMpClientSecret(e.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="mpRedirectUri">Redirect URI</Label>
+                      <Input
+                        id="mpRedirectUri"
+                        placeholder={`https://${typeof window !== 'undefined' ? window.location.hostname : 'agendazap-ai.vercel.app'}/api/integrations/mercadopago/callback`}
+                        value={mpRedirectUri}
+                        onChange={(e) => setMpRedirectUri(e.target.value)}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Configure esta URL no painel do Mercado Pago como Redirect URI da sua aplicação
+                      </p>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button 
+                        onClick={saveMpConfig} 
+                        disabled={!mpClientId || !mpClientSecret || savingMpConfig}
+                        className="flex-1"
+                      >
+                        {savingMpConfig ? (
+                          <>
+                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                            Salvando...
+                          </>
+                        ) : (
+                          'Salvar Configuração'
+                        )}
+                      </Button>
+                      <Button variant="outline" onClick={() => setShowMpSetup(false)}>
+                        Cancelar
+                      </Button>
+                    </div>
+                  </div>
+                </DialogContent>
+              </Dialog>
+            </div>
+          ) : !systemConfig?.enableMercadoPago ? (
             <div className="p-4 bg-amber-50 dark:bg-amber-950/20 rounded-lg border border-amber-200 dark:border-amber-800">
               <p className="text-sm text-amber-800 dark:text-amber-200">
                 O Mercado Pago precisa ser configurado pelo administrador do sistema. 
@@ -502,10 +635,15 @@ export function IntegrationsSettings() {
                 Conecte sua conta Mercado Pago para receber pagamentos de taxas de no-show
                 e agendamentos diretamente na sua conta.
               </p>
-              <Button onClick={connectMercadoPago}>
-                <ExternalLink className="h-4 w-4 mr-2" />
-                Conectar Mercado Pago
-              </Button>
+              <div className="flex gap-2">
+                <Button onClick={connectMercadoPago}>
+                  <ExternalLink className="h-4 w-4 mr-2" />
+                  Conectar Mercado Pago
+                </Button>
+                <Button variant="outline" onClick={() => setShowMpSetup(true)}>
+                  Configurar
+                </Button>
+              </div>
             </div>
           )}
         </CardContent>

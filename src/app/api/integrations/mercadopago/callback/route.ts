@@ -7,11 +7,31 @@ import { encryptCredentials } from '../../route';
  * Handles the callback from Mercado Pago OAuth
  */
 
-const MP_CONFIG = {
-  clientId: process.env.MP_CLIENT_ID || '',
-  clientSecret: process.env.MP_CLIENT_SECRET || '',
-  redirectUri: process.env.MP_REDIRECT_URI || '',
-  baseUrl: 'https://api.mercadopago.com',
+// Get MP config from env vars or database
+async function getMPConfig() {
+  let clientId = process.env.MP_CLIENT_ID || '';
+  let clientSecret = process.env.MP_CLIENT_SECRET || '';
+  let redirectUri = process.env.MP_REDIRECT_URI || '';
+  
+  if (!clientId || !clientSecret || !redirectUri) {
+    try {
+      const config = await db.systemConfiguration.findFirst();
+      if (config) {
+        clientId = clientId || config.mpClientId || '';
+        clientSecret = clientSecret || config.mpClientSecret || '';
+        redirectUri = redirectUri || config.mpRedirectUri || '';
+      }
+    } catch (err) {
+      console.error('[MP Callback] Error reading SystemConfiguration:', err);
+    }
+  }
+  
+  return {
+    clientId,
+    clientSecret,
+    redirectUri,
+    baseUrl: 'https://api.mercadopago.com',
+  };
 }
 
 export async function GET(request: NextRequest) {
@@ -55,6 +75,7 @@ export async function GET(request: NextRequest) {
     }
     
     // Exchange code for tokens
+    const MP_CONFIG = await getMPConfig();
     const tokenResponse = await fetch(`${MP_CONFIG.baseUrl}/oauth/token`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },

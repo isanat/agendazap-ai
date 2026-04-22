@@ -2,6 +2,44 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { generateChatCompletion, canAccountUseAI, transcribeAudioBase64, type ChatMessage } from '@/lib/ai-provider-service';
 import { generateSystemPrompt, findOrCreateClient, detectNameInMessage, updateClientName, detectPaymentPreference, updateClientPaymentPreference } from '@/lib/ai-context-service';
+import { decryptCredentials } from '@/app/api/integrations/route';
+
+/**
+ * In-memory processing lock to prevent duplicate AI responses.
+ * Key: `${accountId}:${phone}`, Value: timestamp when processing started
+ * This prevents race conditions where two concurrent webhook requests for the
+ * same phone number both start AI generation before either completes.
+ */
+const processingLocks = new Map<string, number>();
+const PROCESSING_LOCK_TTL = 30_000; // 30 seconds - max time for AI processing
+
+function acquireProcessingLock(key: string): boolean {
+  const now = Date.now();
+  const existingLock = processingLocks.get(key);
+  
+  // If there's an existing lock that hasn't expired, deny
+  if (existingLock && (now - existingLock) < PROCESSING_LOCK_TTL) {
+    return false;
+  }
+  
+  // Acquire the lock
+  processingLocks.set(key, now);
+  return true;
+}
+
+function releaseProcessingLock(key: string): void {
+  processingLocks.delete(key);
+}
+
+// Cleanup expired locks every 60 seconds
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, timestamp] of processingLocks.entries()) {
+    if (now - timestamp > PROCESSING_LOCK_TTL) {
+      processingLocks.delete(key);
+    }
+  }
+}, 60_000);
 
 /**
  * Verify webhook request authenticity
@@ -532,7 +570,7 @@ async function processIncomingMessage(
       console.warn(`[Webhook] Could not record processed message: ${err?.message || err}`);
     }
   }
-
+  
   // Extract phone number or LID identifier from JID
   let phone = extractPhoneFromJid(data.key?.remoteJid);
   
@@ -718,8 +756,18 @@ async function processIncomingMessage(
   }
 
   // Process message with AI
-  // Pass the original JID so we can send directly to it if phone number resolution fails
-  await processMessageWithAI(accountId, phone, messageText, clientId, instanceName, data.key?.remoteJid);
+  // Use an in-memory processing lock to prevent duplicate AI responses for the same phone
+  const lockKey = `${accountId}:${phone}`;
+  if (!acquireProcessingLock(lockKey)) {
+    console.log(`[Webhook] Skipping - already processing message for ${phone}`);
+    return;
+  }
+  
+  try {
+    await processMessageWithAI(accountId, phone, messageText, clientId, instanceName, data.key?.remoteJid);
+  } finally {
+    releaseProcessingLock(lockKey);
+  }
 }
 
 /**
@@ -759,6 +807,7 @@ function parseBookingCommand(aiResponse: string): {
 
 /**
  * Create an appointment from a parsed booking command
+ * Also creates PIX payment if Mercado Pago is connected and payment method is pix
  */
 async function createAppointmentFromBooking(
   accountId: string,
@@ -770,50 +819,47 @@ async function createAppointmentFromBooking(
     time: string;
     paymentMethod: string;
   }
-): Promise<{ success: boolean; appointmentId?: string; error?: string }> {
+): Promise<{ success: boolean; appointmentId?: string; error?: string; pixData?: { qrCode?: string; qrCodeBase64?: string; ticketUrl?: string } }> {
   try {
-    // Find the service by name
-    const service = await db.service.findFirst({
+    console.log(`[Webhook] Creating appointment: service="${booking.serviceName}", professional="${booking.professionalName}", date=${booking.date}, time=${booking.time}, payment=${booking.paymentMethod}`);
+    
+    // Find the service by name (exact match first, then partial)
+    let foundService = await db.service.findFirst({
       where: { accountId, name: { equals: booking.serviceName, mode: 'insensitive' } }
     });
     
-    if (!service) {
-      // Try partial match
-      const partialService = await db.service.findFirst({
+    if (!foundService) {
+      foundService = await db.service.findFirst({
         where: { accountId, name: { contains: booking.serviceName, mode: 'insensitive' }, isActive: true }
       });
-      if (!partialService) {
-        console.error(`[Webhook] Service not found: ${booking.serviceName}`);
-        return { success: false, error: `Service not found: ${booking.serviceName}` };
-      }
     }
     
-    const foundService = service || (await db.service.findFirst({
-      where: { accountId, name: { contains: booking.serviceName, mode: 'insensitive' }, isActive: true }
-    }))!;
+    if (!foundService) {
+      // Last resort: list all services for debugging
+      const allServices = await db.service.findMany({ where: { accountId, isActive: true }, select: { name: true } });
+      console.error(`[Webhook] Service not found: "${booking.serviceName}". Available services: ${allServices.map(s => s.name).join(', ')}`);
+      return { success: false, error: `Service not found: ${booking.serviceName}` };
+    }
     
-    // Find the professional by name
-    const professional = await db.professional.findFirst({
+    // Find the professional by name (exact match first, then partial)
+    let foundProfessional = await db.professional.findFirst({
       where: { accountId, name: { equals: booking.professionalName, mode: 'insensitive' }, isActive: true }
     });
     
-    if (!professional) {
-      // Try partial match
-      const partialProf = await db.professional.findFirst({
+    if (!foundProfessional) {
+      foundProfessional = await db.professional.findFirst({
         where: { accountId, name: { contains: booking.professionalName, mode: 'insensitive' }, isActive: true }
       });
-      if (!partialProf) {
-        console.error(`[Webhook] Professional not found: ${booking.professionalName}`);
-        return { success: false, error: `Professional not found: ${booking.professionalName}` };
-      }
     }
     
-    const foundProfessional = professional || (await db.professional.findFirst({
-      where: { accountId, name: { contains: booking.professionalName, mode: 'insensitive' }, isActive: true }
-    }))!;
+    if (!foundProfessional) {
+      const allProfs = await db.professional.findMany({ where: { accountId, isActive: true }, select: { name: true } });
+      console.error(`[Webhook] Professional not found: "${booking.professionalName}". Available professionals: ${allProfs.map(p => p.name).join(', ')}`);
+      return { success: false, error: `Professional not found: ${booking.professionalName}` };
+    }
     
-    // Parse date and time
-    const datetime = new Date(`${booking.date}T${booking.time}:00`);
+    // Parse date and time (handle timezone - use America/Sao_Paulo)
+    const datetime = new Date(`${booking.date}T${booking.time}:00-03:00`);
     if (isNaN(datetime.getTime())) {
       console.error(`[Webhook] Invalid datetime: ${booking.date}T${booking.time}`);
       return { success: false, error: `Invalid datetime: ${booking.date}T${booking.time}` };
@@ -847,8 +893,9 @@ async function createAppointmentFromBooking(
         professionalId: foundProfessional.id,
         datetime,
         endTime,
-        status: 'pending',
+        status: booking.paymentMethod === 'pix' ? 'pending' : 'confirmed',
         notes: `Agendado via WhatsApp IA. Pagamento: ${booking.paymentMethod}`,
+        price: foundService.price,
       },
       include: { Service: true, Professional: true }
     });
@@ -868,11 +915,168 @@ async function createAppointmentFromBooking(
       where: { id: clientId },
       data: { totalAppointments: { increment: 1 } }
     }).catch(() => {});
+
+    // Generate PIX payment if Mercado Pago is connected and payment method is pix
+    let pixData: { qrCode?: string; qrCodeBase64?: string; ticketUrl?: string } | undefined;
     
-    return { success: true, appointmentId: appointment.id };
+    if (booking.paymentMethod === 'pix' && foundService.price > 0) {
+      try {
+        pixData = await generatePixPayment(accountId, appointment.id, foundService.price, foundService.name);
+      } catch (pixError) {
+        console.error(`[Webhook] Failed to generate PIX payment: ${pixError instanceof Error ? pixError.message : pixError}`);
+        // Don't fail the appointment creation - just log the error
+      }
+    }
+    
+    return { success: true, appointmentId: appointment.id, pixData };
   } catch (error) {
     console.error('[Webhook] Error creating appointment:', error);
     return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+  }
+}
+
+/**
+ * Generate PIX payment for an appointment using Mercado Pago
+ */
+async function generatePixPayment(
+  accountId: string,
+  appointmentId: string,
+  amount: number,
+  description: string
+): Promise<{ qrCode?: string; qrCodeBase64?: string; ticketUrl?: string } | undefined> {
+  try {
+    // Check if Mercado Pago is connected for this account
+    const integration = await db.integration.findUnique({
+      where: { accountId_type: { accountId, type: 'mercadopago' } }
+    });
+
+    if (!integration || integration.status !== 'connected') {
+      console.log(`[Webhook] Mercado Pago not connected for account ${accountId}, skipping PIX generation`);
+      return undefined;
+    }
+
+    const credentials = decryptCredentials(integration.credentials);
+    const accessToken = credentials.accessToken as string;
+    const expiresAt = credentials.expiresAt ? new Date(credentials.expiresAt as string) : null;
+    
+    // Check if token is expired
+    if (expiresAt && expiresAt.getTime() < Date.now()) {
+      // Try to refresh the token
+      console.log(`[Webhook] Mercado Pago token expired, attempting refresh...`);
+      const refreshed = await refreshMercadoPagoToken(accountId, credentials.refreshToken as string);
+      if (!refreshed) {
+        console.log(`[Webhook] Token refresh failed, skipping PIX generation`);
+        return undefined;
+      }
+    }
+
+    const currentAccessToken = accessToken;
+    const expirationDate = new Date(Date.now() + 3600 * 1000).toISOString(); // 1 hour
+
+    // Create PIX payment via Mercado Pago API
+    const response = await fetch('https://api.mercadopago.com/v1/payments', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${currentAccessToken}`,
+      },
+      body: JSON.stringify({
+        transaction_amount: amount,
+        description: `Agendamento: ${description}`,
+        payment_method_id: 'pix',
+        external_reference: `appointment_${appointmentId}`,
+        date_of_expiration: expirationDate,
+        payer: {
+          email: 'cliente@agendazap.com',
+        },
+      }),
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      console.error(`[Webhook] Mercado Pago API error: ${response.status} - ${error.substring(0, 200)}`);
+      return undefined;
+    }
+
+    const data = await response.json();
+    
+    // Update appointment with PIX data
+    await db.appointment.update({
+      where: { id: appointmentId },
+      data: {
+        pixQrCode: data.point_of_interaction?.transaction_data?.qr_code || null,
+        status: 'pending',
+      }
+    });
+
+    console.log(`[Webhook] ✅ PIX payment created: ${data.id} for appointment ${appointmentId}`);
+    
+    return {
+      qrCode: data.point_of_interaction?.transaction_data?.qr_code,
+      qrCodeBase64: data.point_of_interaction?.transaction_data?.qr_code_base64,
+      ticketUrl: data.point_of_interaction?.transaction_data?.ticket_url,
+    };
+  } catch (error) {
+    console.error('[Webhook] Error generating PIX payment:', error);
+    return undefined;
+  }
+}
+
+/**
+ * Refresh Mercado Pago access token using refresh token
+ */
+async function refreshMercadoPagoToken(accountId: string, refreshToken: string): Promise<boolean> {
+  try {
+    const clientId = process.env.MP_CLIENT_ID;
+    const clientSecret = process.env.MP_CLIENT_SECRET;
+    
+    if (!clientId || !clientSecret) {
+      console.log('[Webhook] MP_CLIENT_ID or MP_CLIENT_SECRET not configured, cannot refresh token');
+      return false;
+    }
+
+    const response = await fetch('https://api.mercadopago.com/oauth/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'refresh_token',
+        client_id: clientId,
+        client_secret: clientSecret,
+        refresh_token: refreshToken,
+      }),
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      console.error(`[Webhook] Token refresh failed: ${response.status} - ${error}`);
+      return false;
+    }
+
+    const tokens = await response.json();
+    const { access_token, refresh_token: newRefreshToken, expires_in } = tokens;
+    const newExpiresAt = new Date(Date.now() + (expires_in || 21600) * 1000);
+
+    // Update the integration with new tokens
+    const { encryptCredentials } = await import('@/app/api/integrations/route');
+    const encryptedCredentials = encryptCredentials({
+      accessToken: access_token,
+      refreshToken: newRefreshToken || refreshToken,
+      expiresAt: newExpiresAt.toISOString(),
+    });
+
+    await db.integration.update({
+      where: { accountId_type: { accountId, type: 'mercadopago' } },
+      data: {
+        credentials: encryptedCredentials,
+        lastSync: new Date(),
+      },
+    });
+
+    console.log(`[Webhook] ✅ Mercado Pago token refreshed for account ${accountId}`);
+    return true;
+  } catch (error) {
+    console.error('[Webhook] Error refreshing Mercado Pago token:', error);
+    return false;
   }
 }
 
@@ -936,20 +1140,47 @@ async function processMessageWithAI(
       
       // Create appointment if booking command was found
       let appointmentId: string | undefined;
+      let pixInfo: { qrCode?: string; ticketUrl?: string } | undefined;
       if (booking) {
         console.log(`[Webhook] 📅 Booking command detected: ${booking.serviceName} with ${booking.professionalName} on ${booking.date} at ${booking.time}`);
         const bookingResult = await createAppointmentFromBooking(accountId, clientId, booking);
         if (bookingResult.success) {
           appointmentId = bookingResult.appointmentId;
-          console.log(`[Webhook] ✅ Appointment created successfully: ${appointmentId}`);
+          pixInfo = bookingResult.pixData;
+          console.log(`[Webhook] ✅ Appointment created successfully: ${appointmentId}${pixInfo ? ' with PIX payment' : ''}`);
         } else {
           console.error(`[Webhook] ❌ Failed to create appointment: ${bookingResult.error}`);
+          // Append error info to the response so Luna can inform the client
+          // Don't mention the [AGENDAR:] system, just the practical issue
         }
       }
       
-      const response = cleanedResponse;
+      // Build the response, appending PIX info if available
+      let response = cleanedResponse;
+      if (pixInfo?.qrCode) {
+        response += `\n\n💳 PIX Copia e Cola:\n${pixInfo.qrCode}`;
+      } else if (pixInfo?.ticketUrl) {
+        response += `\n\n💳 Link para pagamento PIX: ${pixInfo.ticketUrl}`;
+      }
       const aiTime = Date.now() - processStart;
       console.log(`[Webhook] 🤖 AI response generated in ${aiTime}ms: "${response.substring(0, 80)}..."`);
+      
+      // RESPONSE-LEVEL DEDUP: Check if we already sent a response to this phone in the last 15 seconds.
+      // This prevents duplicate messages when Evolution API retries the webhook or sends duplicate events.
+      const recentOutgoing = await db.whatsappMessage.findFirst({
+        where: {
+          accountId,
+          clientPhone: phoneForContext,
+          direction: 'outgoing',
+          createdAt: { gt: new Date(Date.now() - 15_000) }, // Last 15 seconds
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+      
+      if (recentOutgoing) {
+        console.log(`[Webhook] ⚠️ Skipping duplicate outgoing message - already sent response to ${phoneForContext} at ${recentOutgoing.createdAt.toISOString()}`);
+        return;
+      }
       
       const savedMessage = await db.whatsappMessage.create({
         data: {
@@ -1089,16 +1320,26 @@ async function generateAIResponse(
     
     // Get conversation history from database (more reliable than in-memory)
     // Reduced from 10 to 5 messages to avoid Groq rate limit (TPM exceeded with 10 messages)
-    const history = await getConversationHistory(accountId, phone, 5);
+    // We fetch 6 and use only the first 5 (excluding the current message which was just saved)
+    const history = await getConversationHistory(accountId, phone, 6);
     console.log(`[Webhook] Conversation history: ${history.length} messages`);
+    
+    // The history includes the current incoming message (just saved to DB).
+    // We exclude it from the context since we add it explicitly as the last user message.
+    // Also filter out any messages with [AGENDAR:...] markers from previous AI responses
+    // since those are internal commands, not user-visible text.
+    const previousHistory = history
+      .slice(0, -1) // Remove the current message (last in history)
+      .filter(m => !m.content.includes('[AGENDAR:')) // Remove booking markers from context
+      .slice(-4); // Keep only last 4 messages to stay within token limits
 
     const messages: ChatMessage[] = [
       { role: 'system', content: systemPrompt },
-      ...history.slice(0, -1),
+      ...previousHistory,
       { role: 'user', content: message }
     ];
 
-    console.log(`[Webhook] Sending ${messages.length} messages to AI (system prompt + ${history.length - 1} history + 1 user message)`);
+    console.log(`[Webhook] Sending ${messages.length} messages to AI (system prompt + ${previousHistory.length} history + 1 user message)`);
     const result = await generateChatCompletion(accountId, messages);
 
     if (!result.success) {

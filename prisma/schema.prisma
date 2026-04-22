@@ -91,6 +91,7 @@ model Appointment {
   datetime           DateTime
   endTime            DateTime
   status             String       @default("pending")
+  price              Float?
   cancellationReason String?
   cancelledAt        DateTime?
   cancelledBy        String?
@@ -453,6 +454,9 @@ model SystemConfiguration {
   enableAiAssistant   Boolean  @default(true)
   enableMercadoPago   Boolean  @default(true)
   enableNfeGeneration Boolean  @default(false)
+  mpClientId          String?
+  mpClientSecret      String?
+  mpRedirectUri       String?
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
   AIProvider          AIProvider[]
