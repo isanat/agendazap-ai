@@ -36,7 +36,7 @@ import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
-import { useToast } from '@/hooks/use-toast';
+import { toast } from 'sonner';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
   Select,
@@ -115,13 +115,13 @@ interface TopClient {
 }
 
 export function LoyaltyPage() {
-  const { toast } = useToast();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [program, setProgram] = useState<LoyaltyProgram | null>(null);
   const [stats, setStats] = useState<LoyaltyStats | null>(null);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [topClients, setTopClients] = useState<TopClient[]>([]);
+  const [clients, setClients] = useState<TopClient[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [typeFilter, setTypeFilter] = useState<string>('all');
   const [adjustPointsDialog, setAdjustPointsDialog] = useState(false);
@@ -129,6 +129,7 @@ export function LoyaltyPage() {
   const [pointsAmount, setPointsAmount] = useState('');
   const [pointsType, setPointsType] = useState<'earn' | 'redeem' | 'bonus'>('earn');
   const [pointsDescription, setPointsDescription] = useState('');
+  const [adjustingPoints, setAdjustingPoints] = useState(false);
 
   // Form state
   const [formData, setFormData] = useState({
@@ -143,19 +144,16 @@ export function LoyaltyPage() {
     isActive: true,
   });
 
-  useEffect(() => {
-    fetchProgram();
-    fetchTransactions();
-    fetchTopClients();
-  }, []);
-
-  const fetchProgram = async () => {
+  const fetchData = async () => {
+    setLoading(true);
     try {
       const response = await authFetch('/api/loyalty');
       if (response.ok) {
         const data = await response.json();
         setProgram(data.program);
         setStats(data.stats);
+        setTransactions(data.transactions || []);
+        setTopClients(data.topClients || []);
         setFormData({
           name: data.program.name,
           pointsPerReal: data.program.pointsPerReal.toString(),
@@ -167,79 +165,36 @@ export function LoyaltyPage() {
           referralBonus: data.program.referralBonus.toString(),
           isActive: data.program.isActive,
         });
+      } else {
+        toast.error('Erro ao carregar programa de fidelidade');
       }
     } catch (error) {
       console.error('Erro ao buscar programa:', error);
+      toast.error('Erro ao carregar programa de fidelidade');
     } finally {
       setLoading(false);
     }
   };
 
-  const fetchTransactions = async () => {
-    // Simulated transactions for demo
-    setTransactions([
-      {
-        id: '1',
-        clientId: 'c1',
-        Client: { name: 'Maria Silva' },
-        points: 100,
-        type: 'earn',
-        description: 'Serviço: Corte + Escova',
-        createdAt: new Date(Date.now() - 1000 * 60 * 30).toISOString(),
-        expiryDate: new Date(Date.now() + 1000 * 60 * 60 * 24 * 365).toISOString(),
-      },
-      {
-        id: '2',
-        clientId: 'c2',
-        Client: { name: 'Ana Costa' },
-        points: -50,
-        type: 'redeem',
-        description: 'Desconto em serviço',
-        createdAt: new Date(Date.now() - 1000 * 60 * 60 * 2).toISOString(),
-        expiryDate: null,
-      },
-      {
-        id: '3',
-        clientId: 'c3',
-        Client: { name: 'Julia Santos' },
-        points: 50,
-        type: 'bonus',
-        description: 'Bônus de boas-vindas',
-        createdAt: new Date(Date.now() - 1000 * 60 * 60 * 5).toISOString(),
-        expiryDate: new Date(Date.now() + 1000 * 60 * 60 * 24 * 365).toISOString(),
-      },
-      {
-        id: '4',
-        clientId: 'c1',
-        Client: { name: 'Maria Silva' },
-        points: 30,
-        type: 'referral',
-        description: 'Indicação: Pedro Oliveira',
-        createdAt: new Date(Date.now() - 1000 * 60 * 60 * 24).toISOString(),
-        expiryDate: new Date(Date.now() + 1000 * 60 * 60 * 24 * 365).toISOString(),
-      },
-      {
-        id: '5',
-        clientId: 'c4',
-        Client: { name: 'Carla Mendes' },
-        points: -20,
-        type: 'expire',
-        description: 'Pontos expirados',
-        createdAt: new Date(Date.now() - 1000 * 60 * 60 * 48).toISOString(),
-        expiryDate: null,
-      },
-    ]);
-  };
+  useEffect(() => {
+    fetchData();
+  }, []);
 
-  const fetchTopClients = async () => {
-    // Simulated top clients for demo
-    setTopClients([
-      { id: 'c1', name: 'Maria Silva', loyaltyPoints: 450, totalAppointments: 25 },
-      { id: 'c2', name: 'Ana Costa', loyaltyPoints: 320, totalAppointments: 18 },
-      { id: 'c3', name: 'Julia Santos', loyaltyPoints: 280, totalAppointments: 15 },
-      { id: 'c4', name: 'Carla Mendes', loyaltyPoints: 200, totalAppointments: 12 },
-      { id: 'c5', name: 'Fernanda Lima', loyaltyPoints: 150, totalAppointments: 10 },
-    ]);
+  const fetchClients = async () => {
+    try {
+      const response = await authFetch('/api/clients');
+      if (response.ok) {
+        const data = await response.json();
+        setClients((data.clients || []).map((c: any) => ({
+          id: c.id,
+          name: c.name,
+          loyaltyPoints: c.loyaltyPoints || 0,
+          totalAppointments: c.totalAppointments || 0,
+        })));
+      }
+    } catch (error) {
+      console.error('Erro ao buscar clientes:', error);
+    }
   };
 
   const handleSave = async () => {
@@ -254,24 +209,13 @@ export function LoyaltyPage() {
       if (response.ok) {
         const data = await response.json();
         setProgram(data);
-        toast({
-          title: 'Programa atualizado!',
-          description: 'As configurações foram salvas com sucesso.',
-        });
+        toast.success('Programa atualizado! As configurações foram salvas com sucesso.');
       } else {
         const error = await response.json();
-        toast({
-          title: 'Erro',
-          description: error.error || 'Erro ao salvar programa',
-          variant: 'destructive',
-        });
+        toast.error(error.error || 'Erro ao salvar programa');
       }
     } catch (error) {
-      toast({
-        title: 'Erro',
-        description: 'Erro ao salvar programa',
-        variant: 'destructive',
-      });
+      toast.error('Erro ao salvar programa');
     } finally {
       setSaving(false);
     }
@@ -398,7 +342,7 @@ export function LoyaltyPage() {
               Configure o programa de pontos e recompensas
             </p>
           </div>
-          <Button onClick={() => setAdjustPointsDialog(true)} className="bg-gradient-to-r from-amber-500 to-orange-500">
+          <Button onClick={() => { setAdjustPointsDialog(true); fetchClients(); }} className="bg-gradient-to-r from-amber-500 to-orange-500">
             <Plus className="mr-2 h-4 w-4" />
             Ajustar Pontos
           </Button>
@@ -797,7 +741,7 @@ export function LoyaltyPage() {
 
                 {/* Save Button */}
                 <div className="flex justify-end gap-2">
-                  <Button variant="outline" onClick={fetchProgram}>
+                  <Button variant="outline" onClick={fetchData}>
                     Cancelar
                   </Button>
                   <Button onClick={handleSave} disabled={saving} className="bg-gradient-to-r from-amber-500 to-orange-500">
@@ -1003,7 +947,7 @@ export function LoyaltyPage() {
                     <SelectValue placeholder="Selecione um cliente" />
                   </SelectTrigger>
                   <SelectContent>
-                    {topClients.map((client) => (
+                    {clients.map((client) => (
                       <SelectItem key={client.id} value={client.id}>
                         {client.name} ({formatNumber(client.loyaltyPoints)} pts)
                       </SelectItem>
@@ -1046,9 +990,52 @@ export function LoyaltyPage() {
               <Button variant="outline" onClick={() => setAdjustPointsDialog(false)}>
                 Cancelar
               </Button>
-              <Button className="bg-gradient-to-r from-amber-500 to-orange-500">
-                <Star className="mr-2 h-4 w-4" />
-                Ajustar Pontos
+              <Button
+                className="bg-gradient-to-r from-amber-500 to-orange-500"
+                disabled={adjustingPoints || !selectedClient || !pointsAmount}
+                onClick={async () => {
+                  if (!selectedClient || !pointsAmount) return;
+                  setAdjustingPoints(true);
+                  try {
+                    const response = await authFetch('/api/loyalty/points', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        clientId: selectedClient,
+                        points: parseInt(pointsAmount),
+                        type: pointsType,
+                        description: pointsDescription || undefined,
+                      }),
+                    });
+                    if (response.ok) {
+                      toast.success('Pontos ajustados com sucesso!');
+                      setAdjustPointsDialog(false);
+                      setSelectedClient('');
+                      setPointsAmount('');
+                      setPointsDescription('');
+                      fetchData();
+                    } else {
+                      const error = await response.json();
+                      toast.error(error.error || 'Erro ao ajustar pontos');
+                    }
+                  } catch (error) {
+                    toast.error('Erro ao ajustar pontos');
+                  } finally {
+                    setAdjustingPoints(false);
+                  }
+                }}
+              >
+                {adjustingPoints ? (
+                  <>
+                    <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                    Ajustando...
+                  </>
+                ) : (
+                  <>
+                    <Star className="mr-2 h-4 w-4" />
+                    Ajustar Pontos
+                  </>
+                )}
               </Button>
             </DialogFooter>
           </DialogContent>

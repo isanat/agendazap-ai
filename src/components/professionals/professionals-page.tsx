@@ -130,7 +130,7 @@ export function ProfessionalsPage() {
         workingDays: prof.workingDays,
         openingTime: prof.openingTime,
         closingTime: prof.closingTime,
-        services: prof.services || [],
+        services: (prof.ServiceProfessional || []).map((sp: any) => sp.serviceId || sp.Service?.id),
         appointmentCount: prof.appointmentCount || 0
       }))
       setProfessionals(transformedProfessionals)
@@ -219,7 +219,8 @@ export function ProfessionalsPage() {
             phone: formData.phone,
             email: formData.email,
             color: formData.color,
-            isActive: formData.isActive
+            isActive: formData.isActive,
+            services: formData.services
           })
         })
         
@@ -235,7 +236,8 @@ export function ProfessionalsPage() {
             name: formData.name,
             phone: formData.phone,
             email: formData.email,
-            color: formData.color
+            color: formData.color,
+            services: formData.services
           })
         })
         
@@ -268,6 +270,19 @@ export function ProfessionalsPage() {
       toast.error('Erro ao remover profissional')
       console.error(err)
     }
+  }
+
+  const formatWorkingDays = (workingDays: string | null) => {
+    if (!workingDays) return ''
+    const dayMap: Record<string, string> = {
+      '0': 'Dom', '1': 'Seg', '2': 'Ter', '3': 'Qua', '4': 'Qui', '5': 'Sex', '6': 'Sáb',
+    }
+    const days = workingDays.split(',').map(d => dayMap[d.trim()]).filter(Boolean)
+    if (days.length === 0) return workingDays
+    if (days.length === 7) return 'Todos os dias'
+    // Check for consecutive days
+    if (JSON.stringify(days) === JSON.stringify(['Seg', 'Ter', 'Qua', 'Qui', 'Sex'])) return 'Seg - Sex'
+    return days.join(', ')
   }
 
   const toggleService = (serviceId: string) => {
@@ -668,7 +683,7 @@ export function ProfessionalsPage() {
                           {professional.workingDays && (
                             <div className="flex items-center gap-2 text-sm text-muted-foreground">
                               <Briefcase className="w-3.5 h-3.5" />
-                              <span>Seg - Sex</span>
+                              <span>{formatWorkingDays(professional.workingDays)}</span>
                             </div>
                           )}
                         </div>

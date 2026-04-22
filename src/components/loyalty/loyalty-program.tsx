@@ -1,10 +1,10 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
 import { 
   Gift, Award, Star, TrendingUp, ChevronUp, ChevronDown, 
-  Plus, Edit, Trash2, Crown, Users, Minus
+  Plus, Edit, Trash2, Crown, Users, Minus, Loader2
 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -20,8 +20,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
+import { authFetch } from '@/lib/auth-fetch'
 import { EmptyState } from '@/components/ui/empty-state'
 
 interface LoyaltyTier {
@@ -84,25 +86,52 @@ const loyaltyTiers: LoyaltyTier[] = [
   }
 ]
 
-const mockLoyaltyClients: LoyaltyClient[] = [
-  { id: '1', name: 'Maria Silva', phone: '(11) 98765-4321', points: 450, tier: 'gold', totalSpent: 2450, visits: 18, lastVisit: new Date('2025-04-10') },
-  { id: '2', name: 'João Santos', phone: '(11) 91234-5678', points: 320, tier: 'gold', totalSpent: 1800, visits: 12, lastVisit: new Date('2025-04-08') },
-  { id: '3', name: 'Ana Oliveira', phone: '(11) 92345-6789', points: 120, tier: 'silver', totalSpent: 680, visits: 8, lastVisit: new Date('2025-04-05') },
-  { id: '4', name: 'Carlos Lima', phone: '(11) 93456-7890', points: 85, tier: 'bronze', totalSpent: 420, visits: 5, lastVisit: new Date('2025-04-01') },
-  { id: '5', name: 'Patricia Costa', phone: '(11) 94567-8901', points: 580, tier: 'platinum', totalSpent: 3200, visits: 24, lastVisit: new Date('2025-04-12') },
-]
-
 export function LoyaltyProgram() {
-  const [clients, setClients] = useState<LoyaltyClient[]>(mockLoyaltyClients)
+  const [clients, setClients] = useState<LoyaltyClient[]>([])
+  const [isLoading, setIsLoading] = useState(true)
   const [selectedClient, setSelectedClient] = useState<LoyaltyClient | null>(null)
   const [pointsToAdd, setPointsToAdd] = useState(0)
   const [showAddPointsDialog, setShowAddPointsDialog] = useState(false)
+  const [isAdjusting, setIsAdjusting] = useState(false)
   const [filter, setFilter] = useState<'all' | 'bronze' | 'silver' | 'gold' | 'platinum'>('all')
   const [searchQuery, setSearchQuery] = useState('')
 
   const getTierFromPoints = (points: number): LoyaltyTier => {
-    return loyaltyTiers.find(tier => points >= tier.minPoints) || loyaltyTiers[loyaltyTiers.length - 1]
+    const sorted = [...loyaltyTiers].sort((a, b) => b.minPoints - a.minPoints)
+    return sorted.find(tier => points >= tier.minPoints) || loyaltyTiers[0]
   }
+
+  const fetchClients = async () => {
+    setIsLoading(true)
+    try {
+      const response = await authFetch('/api/clients')
+      if (response.ok) {
+        const data = await response.json()
+        const mapped = (data.clients || []).map((c: any) => ({
+          id: c.id,
+          name: c.name,
+          phone: c.phone || '',
+          points: c.loyaltyPoints || 0,
+          tier: getTierFromPoints(c.loyaltyPoints || 0).id,
+          totalSpent: 0,
+          visits: c.totalAppointments || 0,
+          lastVisit: c.lastVisit ? new Date(c.lastVisit) : new Date(),
+        }))
+        setClients(mapped)
+      } else {
+        toast.error('Erro ao carregar clientes')
+      }
+    } catch (error) {
+      console.error('Erro ao buscar clientes:', error)
+      toast.error('Erro ao carregar clientes')
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    fetchClients()
+  }, [])
 
   const filteredClients = clients
     .filter(client => filter === 'all' || client.tier === filter)
@@ -115,29 +144,87 @@ export function LoyaltyProgram() {
   const stats = {
     totalClients: clients.length,
     totalPoints: clients.reduce((sum, c) => sum + c.points, 0),
-    averagePoints: Math.round(clients.reduce((sum, c) => sum + c.points, 0) / clients.length),
+    averagePoints: clients.length > 0 ? Math.round(clients.reduce((sum, c) => sum + c.points, 0) / clients.length) : 0,
     platinumCount: clients.filter(c => c.tier === 'platinum').length,
     goldCount: clients.filter(c => c.tier === 'gold').length,
   }
 
-  const handleAddPoints = (clientId: string, points: number) => {
-    setClients(prev => prev.map(c => 
-      c.id === clientId 
-        ? { ...c, points: c.points + points }
-        : c
-    ))
-    toast.success(`Adicionados ${points} pontos para o cliente!`)
-    setShowAddPointsDialog(false)
-    setPointsToAdd(0)
+  const handleAddPoints = async (clientId: string, points: number) => {
+    setIsAdjusting(true)
+    try {
+      const response = await authFetch('/api/loyalty/points', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          clientId,
+          points,
+          type: 'bonus',
+          description: 'Ajuste manual de pontos',
+        }),
+      })
+      if (response.ok) {
+        toast.success(`Adicionados ${points} pontos para o cliente!`)
+        setShowAddPointsDialog(false)
+        setPointsToAdd(0)
+        fetchClients()
+      } else {
+        const error = await response.json()
+        toast.error(error.error || 'Erro ao adicionar pontos')
+      }
+    } catch (error) {
+      toast.error('Erro ao adicionar pontos')
+    } finally {
+      setIsAdjusting(false)
+    }
   }
 
-  const handleRemovePoints = (clientId: string, points: number) => {
-    setClients(prev => prev.map(c => 
-      c.id === clientId 
-        ? { ...c, points: Math.max(0, c.points - points) }
-        : c
-    ))
-    toast.success(`Removidos ${points} pontos`)
+  const handleRemovePoints = async (clientId: string, points: number) => {
+    try {
+      const response = await authFetch('/api/loyalty/points', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          clientId,
+          points,
+          type: 'redeem',
+          description: 'Remoção manual de pontos',
+        }),
+      })
+      if (response.ok) {
+        toast.success(`Removidos ${points} pontos`)
+        fetchClients()
+      } else {
+        const error = await response.json()
+        toast.error(error.error || 'Erro ao remover pontos')
+      }
+    } catch (error) {
+      toast.error('Erro ao remover pontos')
+    }
+  }
+
+  if (isLoading) {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <Skeleton className="h-6 w-48" />
+            <Skeleton className="h-4 w-64 mt-2" />
+          </div>
+          <Skeleton className="h-10 w-32" />
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          {[1, 2, 3, 4].map(i => (
+            <Skeleton key={i} className="h-24" />
+          ))}
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+          {[1, 2, 3, 4, 5].map(i => (
+            <Skeleton key={i} className="h-20" />
+          ))}
+        </div>
+        <Skeleton className="h-96" />
+      </div>
+    )
   }
 
   return (
@@ -393,8 +480,18 @@ export function LoyaltyProgram() {
             <Button variant="outline" onClick={() => setShowAddPointsDialog(false)}>
               Cancelar
             </Button>
-            <Button onClick={() => handleAddPoints(selectedClient!.id, pointsToAdd)}>
-              Adicionar
+            <Button
+              onClick={() => handleAddPoints(selectedClient!.id, pointsToAdd)}
+              disabled={isAdjusting || pointsToAdd <= 0}
+            >
+              {isAdjusting ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Ajustando...
+                </>
+              ) : (
+                'Adicionar'
+              )}
             </Button>
           </DialogFooter>
         </DialogContent>

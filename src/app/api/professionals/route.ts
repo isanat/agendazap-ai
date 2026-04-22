@@ -57,7 +57,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
-    const { accountId, name, phone, email, color, createUserAccount, userPassword } = body
+    const { accountId, name, phone, email, color, createUserAccount, userPassword, services } = body
 
     if (!accountId || !name) {
       return NextResponse.json({ error: 'Missing required fields' }, { status: 400 })
@@ -122,10 +122,20 @@ export async function POST(request: NextRequest) {
         color: color || '#10B981',
         isActive: true,
         userId: linkedUserId,
+        ...(services && services.length > 0 && {
+          ServiceProfessional: {
+            create: services.map((serviceId: string) => ({
+              serviceId,
+            })),
+          },
+        }),
       },
       include: {
         User: {
           select: { id: true, email: true, isActive: true }
+        },
+        ServiceProfessional: {
+          include: { Service: true }
         }
       }
     })
@@ -146,7 +156,7 @@ export async function POST(request: NextRequest) {
 export async function PUT(request: NextRequest) {
   try {
     const body = await request.json()
-    const { id, name, phone, email, color, isActive, createUserAccount, userPassword, unlinkUser } = body
+    const { id, name, phone, email, color, isActive, createUserAccount, userPassword, unlinkUser, services } = body
 
     if (!id) {
       return NextResponse.json({ error: 'Professional ID required' }, { status: 400 })
@@ -216,12 +226,33 @@ export async function PUT(request: NextRequest) {
       if (updateData[key] === undefined) delete updateData[key]
     })
 
+    // Handle services association
+    if (services !== undefined) {
+      // Delete existing service associations
+      await db.serviceProfessional.deleteMany({
+        where: { professionalId: id }
+      })
+
+      // Create new service associations
+      if (services.length > 0) {
+        await db.serviceProfessional.createMany({
+          data: services.map((serviceId: string) => ({
+            professionalId: id,
+            serviceId,
+          }))
+        })
+      }
+    }
+
     const professional = await db.professional.update({
       where: { id },
       data: updateData,
       include: {
         User: {
           select: { id: true, email: true, isActive: true }
+        },
+        ServiceProfessional: {
+          include: { Service: true }
         }
       }
     })

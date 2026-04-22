@@ -73,6 +73,34 @@ export async function GET(request: NextRequest) {
       },
     });
 
+    // Buscar transações recentes com dados do cliente
+    const transactions = await db.loyaltyTransaction.findMany({
+      where: { accountId },
+      include: {
+        Client: {
+          select: { name: true },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 50,
+    });
+
+    // Buscar top clientes por pontos
+    const topClients = await db.client.findMany({
+      where: {
+        accountId,
+        loyaltyPoints: { gt: 0 },
+      },
+      select: {
+        id: true,
+        name: true,
+        loyaltyPoints: true,
+        totalAppointments: true,
+      },
+      orderBy: { loyaltyPoints: 'desc' },
+      take: 10,
+    });
+
     return NextResponse.json({
       program: loyaltyProgram,
       stats: {
@@ -82,6 +110,8 @@ export async function GET(request: NextRequest) {
         totalRedeemed: Math.abs(totalRedeemed._sum?.points ?? 0),
         clientsWithPoints,
       },
+      transactions,
+      topClients,
     });
   } catch (error) {
     console.error('Erro ao buscar programa de fidelidade:', error);

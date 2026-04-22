@@ -1,11 +1,11 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { 
   Package, Plus, Edit, Trash2, Gift, Percent, 
   ChevronDown, ChevronUp, Sparkles, DollarSign,
-  Clock, Tag, Check, X, Eye, Copy
+  Clock, Tag, Check, X, Eye, Copy, Loader2
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -36,10 +36,19 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from '@/components/ui/accordion'
+import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
+import { authFetch } from '@/lib/auth-fetch'
 
 interface Service {
+  id: string
+  name: string
+  price: number
+  durationMinutes: number
+}
+
+interface PackageServiceItem {
   id: string
   name: string
   price: number
@@ -50,7 +59,7 @@ interface ServicePackage {
   id: string
   name: string
   description: string
-  services: { id: string; name: string; price: number; durationMinutes: number }[]
+  services: PackageServiceItem[]
   originalPrice: number
   discountedPrice: number
   discountPercent: number
@@ -59,80 +68,21 @@ interface ServicePackage {
   isFeatured: boolean
   maxUses: number | null
   currentUses: number
-  createdAt: Date
+  createdAt: string
 }
 
 interface ServicePackagesProps {
-  services: Service[]
+  services?: Service[]
   onAddPackage?: (pkg: Partial<ServicePackage>) => void
 }
 
-// Mock packages for demonstration
-const mockPackages: ServicePackage[] = [
-  {
-    id: '1',
-    name: 'Pacote Noiva',
-    description: 'Tudo que a noiva precisa para o grande dia',
-    services: [
-      { id: '1', name: 'Corte Feminino', price: 80, durationMinutes: 45 },
-      { id: '2', name: 'Hidratação', price: 120, durationMinutes: 60 },
-      { id: '3', name: 'Escova', price: 70, durationMinutes: 45 },
-      { id: '4', name: 'Maquiagem', price: 150, durationMinutes: 60 },
-    ],
-    originalPrice: 420,
-    discountedPrice: 349,
-    discountPercent: 17,
-    validDays: 30,
-    isActive: true,
-    isFeatured: true,
-    maxUses: 10,
-    currentUses: 3,
-    createdAt: new Date('2025-04-01'),
-  },
-  {
-    id: '2',
-    name: 'Combo Barba',
-    description: 'Barba perfeita com tratamento incluído',
-    services: [
-      { id: '5', name: 'Barba Completa', price: 45, durationMinutes: 30 },
-      { id: '6', name: 'Toalha Quente', price: 25, durationMinutes: 15 },
-    ],
-    originalPrice: 70,
-    discountedPrice: 55,
-    discountPercent: 21,
-    validDays: 14,
-    isActive: true,
-    isFeatured: false,
-    maxUses: null,
-    currentUses: 12,
-    createdAt: new Date('2025-04-05'),
-  },
-  {
-    id: '3',
-    name: 'Day Spa',
-    description: 'Dia de relaxamento e cuidados especiais',
-    services: [
-      { id: '7', name: 'Manicure', price: 40, durationMinutes: 30 },
-      { id: '8', name: 'Pedicure', price: 45, durationMinutes: 30 },
-      { id: '2', name: 'Hidratação Capilar', price: 120, durationMinutes: 60 },
-      { id: '9', name: 'Massagem Relaxante', price: 150, durationMinutes: 60 },
-    ],
-    originalPrice: 355,
-    discountedPrice: 289,
-    discountPercent: 19,
-    validDays: 60,
-    isActive: false,
-    isFeatured: false,
-    maxUses: 20,
-    currentUses: 8,
-    createdAt: new Date('2025-03-20'),
-  },
-]
-
-export function ServicePackages({ services, onAddPackage }: ServicePackagesProps) {
-  const [packages, setPackages] = useState<ServicePackage[]>(mockPackages)
+export function ServicePackages({ services: propServices, onAddPackage }: ServicePackagesProps) {
+  const [packages, setPackages] = useState<ServicePackage[]>([])
+  const [services, setServices] = useState<Service[]>(propServices || [])
+  const [isLoading, setIsLoading] = useState(true)
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [editingPackage, setEditingPackage] = useState<ServicePackage | null>(null)
+  const [isSaving, setIsSaving] = useState(false)
   const [filter, setFilter] = useState<'all' | 'active' | 'inactive'>('all')
   const [formData, setFormData] = useState<{
     name: string
@@ -151,6 +101,66 @@ export function ServicePackages({ services, onAddPackage }: ServicePackagesProps
     isFeatured: false,
     maxUses: null,
   })
+
+  const fetchPackages = async () => {
+    setIsLoading(true)
+    try {
+      const response = await authFetch('/api/packages?includeInactive=true')
+      if (response.ok) {
+        const data = await response.json()
+        const mapped = (Array.isArray(data) ? data : []).map((pkg: any) => ({
+          id: pkg.id,
+          name: pkg.name,
+          description: pkg.description || '',
+          services: (pkg.packageServices || []).map((ps: any) => ({
+            id: ps.Service?.id || ps.serviceId,
+            name: ps.Service?.name || '',
+            price: ps.Service?.price || 0,
+            durationMinutes: ps.Service?.durationMinutes || 0,
+          })),
+          originalPrice: pkg.originalPrice || 0,
+          discountedPrice: pkg.price || 0,
+          discountPercent: pkg.discountPercent || pkg.discount || 0,
+          validDays: pkg.validityDays || 30,
+          isActive: pkg.isActive ?? true,
+          isFeatured: false,
+          maxUses: null,
+          currentUses: pkg.clientsCount || 0,
+          createdAt: pkg.createdAt || new Date().toISOString(),
+        }))
+        setPackages(mapped)
+      } else {
+        toast.error('Erro ao carregar pacotes')
+      }
+    } catch (error) {
+      console.error('Erro ao buscar pacotes:', error)
+      toast.error('Erro ao carregar pacotes')
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const fetchServices = async () => {
+    try {
+      const accountId = typeof window !== 'undefined' 
+        ? localStorage.getItem('agendazap-account-id') || ''
+        : ''
+      const response = await authFetch(`/api/services?accountId=${accountId}`)
+      if (response.ok) {
+        const data = await response.json()
+        setServices(data.services || [])
+      }
+    } catch (error) {
+      console.error('Erro ao buscar serviços:', error)
+    }
+  }
+
+  useEffect(() => {
+    fetchPackages()
+    if (!propServices || propServices.length === 0) {
+      fetchServices()
+    }
+  }, [])
 
   const filteredPackages = packages.filter(pkg => 
     filter === 'all' || (filter === 'active' ? pkg.isActive : !pkg.isActive)
@@ -196,90 +206,180 @@ export function ServicePackages({ services, onAddPackage }: ServicePackagesProps
     }))
   }
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!formData.name || formData.selectedServices.length < 2) {
       toast.error('Nome e pelo menos 2 serviços são obrigatórios')
       return
     }
 
-    const serviceData = selectedServicesData.map(s => ({
-      id: s.id,
-      name: s.name,
-      price: s.price,
-      durationMinutes: s.durationMinutes
-    }))
+    setIsSaving(true)
+    try {
+      const serviceItems = formData.selectedServices.map(serviceId => ({
+        serviceId,
+        quantity: 1,
+      }))
 
-    if (editingPackage) {
-      setPackages(prev => prev.map(p => 
-        p.id === editingPackage.id 
-          ? { 
-              ...p, 
-              name: formData.name,
-              description: formData.description,
-              services: serviceData,
-              originalPrice,
-              discountedPrice,
-              discountPercent: formData.discountPercent,
-              validDays: formData.validDays,
-              isFeatured: formData.isFeatured,
-              maxUses: formData.maxUses,
-            }
-          : p
-      ))
-      toast.success('Pacote atualizado com sucesso')
-    } else {
-      const newPackage: ServicePackage = {
-        id: Date.now().toString(),
-        name: formData.name,
-        description: formData.description,
-        services: serviceData,
-        originalPrice,
-        discountedPrice,
-        discountPercent: formData.discountPercent,
-        validDays: formData.validDays,
-        isActive: true,
-        isFeatured: formData.isFeatured,
-        maxUses: formData.maxUses,
-        currentUses: 0,
-        createdAt: new Date(),
+      if (editingPackage) {
+        const response = await authFetch('/api/packages', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            id: editingPackage.id,
+            name: formData.name,
+            description: formData.description,
+            price: discountedPrice,
+            originalPrice,
+            discountPercent: formData.discountPercent,
+            validityDays: formData.validDays,
+            isActive: editingPackage.isActive,
+            services: serviceItems,
+          }),
+        })
+
+        if (!response.ok) {
+          const error = await response.json()
+          throw new Error(error.error || 'Erro ao atualizar pacote')
+        }
+
+        toast.success('Pacote atualizado com sucesso')
+      } else {
+        const response = await authFetch('/api/packages', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: formData.name,
+            description: formData.description,
+            price: discountedPrice,
+            originalPrice,
+            discountPercent: formData.discountPercent,
+            totalSessions: 1,
+            validityDays: formData.validDays,
+            services: serviceItems,
+          }),
+        })
+
+        if (!response.ok) {
+          const error = await response.json()
+          throw new Error(error.error || 'Erro ao criar pacote')
+        }
+
+        toast.success('Pacote criado com sucesso')
       }
-      setPackages(prev => [...prev, newPackage])
-      toast.success('Pacote criado com sucesso')
-      
-      if (onAddPackage) {
-        onAddPackage(newPackage)
+
+      setIsDialogOpen(false)
+      fetchPackages()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Erro ao salvar pacote')
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  const handleToggleActive = async (pkg: ServicePackage) => {
+    try {
+      const response = await authFetch('/api/packages', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: pkg.id,
+          name: pkg.name,
+          description: pkg.description,
+          price: pkg.discountedPrice,
+          originalPrice: pkg.originalPrice,
+          discountPercent: pkg.discountPercent,
+          validityDays: pkg.validDays,
+          isActive: !pkg.isActive,
+        }),
+      })
+
+      if (!response.ok) {
+        throw new Error('Erro ao atualizar status')
       }
+
+      toast.success('Status do pacote atualizado')
+      fetchPackages()
+    } catch (error) {
+      toast.error('Erro ao atualizar status do pacote')
     }
-
-    setIsDialogOpen(false)
   }
 
-  const handleToggleActive = (id: string) => {
-    setPackages(prev => prev.map(p => 
-      p.id === id ? { ...p, isActive: !p.isActive } : p
-    ))
-    toast.success('Status do pacote atualizado')
-  }
+  const handleDelete = async (id: string) => {
+    try {
+      const response = await authFetch(`/api/packages?id=${id}`, {
+        method: 'DELETE',
+      })
 
-  const handleDelete = (id: string) => {
-    setPackages(prev => prev.filter(p => p.id !== id))
-    toast.success('Pacote removido')
-  }
+      if (!response.ok) {
+        const error = await response.json()
+        throw new Error(error.error || 'Erro ao excluir pacote')
+      }
 
-  const handleDuplicate = (pkg: ServicePackage) => {
-    const newPackage: ServicePackage = {
-      ...pkg,
-      id: Date.now().toString(),
-      name: `${pkg.name} (cópia)`,
-      currentUses: 0,
-      createdAt: new Date(),
+      toast.success('Pacote removido')
+      fetchPackages()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Erro ao remover pacote')
     }
-    setPackages(prev => [...prev, newPackage])
-    toast.success('Pacote duplicado')
+  }
+
+  const handleDuplicate = async (pkg: ServicePackage) => {
+    try {
+      const serviceItems = pkg.services.map(s => ({
+        serviceId: s.id,
+        quantity: 1,
+      }))
+
+      const response = await authFetch('/api/packages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: `${pkg.name} (cópia)`,
+          description: pkg.description,
+          price: pkg.discountedPrice,
+          originalPrice: pkg.originalPrice,
+          discountPercent: pkg.discountPercent,
+          totalSessions: 1,
+          validityDays: pkg.validDays,
+          services: serviceItems,
+        }),
+      })
+
+      if (!response.ok) {
+        throw new Error('Erro ao duplicar pacote')
+      }
+
+      toast.success('Pacote duplicado')
+      fetchPackages()
+    } catch (error) {
+      toast.error('Erro ao duplicar pacote')
+    }
   }
 
   const activeCount = packages.filter(p => p.isActive).length
   const featuredCount = packages.filter(p => p.isFeatured).length
+
+  if (isLoading) {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <Skeleton className="h-6 w-48" />
+            <Skeleton className="h-4 w-64 mt-2" />
+          </div>
+          <Skeleton className="h-10 w-32" />
+        </div>
+        <div className="grid grid-cols-4 gap-4">
+          {[1, 2, 3, 4].map(i => (
+            <Skeleton key={i} className="h-24" />
+          ))}
+        </div>
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+          {[1, 2, 3].map(i => (
+            <Skeleton key={i} className="h-64" />
+          ))}
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="space-y-6">
@@ -463,7 +563,7 @@ export function ServicePackages({ services, onAddPackage }: ServicePackagesProps
                   <div className="flex items-center gap-2 pt-2">
                     <Switch
                       checked={pkg.isActive}
-                      onCheckedChange={() => handleToggleActive(pkg.id)}
+                      onCheckedChange={() => handleToggleActive(pkg)}
                     />
                     <Button
                       variant="ghost"
@@ -662,9 +762,17 @@ export function ServicePackages({ services, onAddPackage }: ServicePackagesProps
             </Button>
             <Button 
               onClick={handleSave}
+              disabled={isSaving}
               className="bg-gradient-to-r from-purple-500 to-pink-600"
             >
-              {editingPackage ? 'Salvar' : 'Criar Pacote'}
+              {isSaving ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-1 animate-spin" />
+                  Salvando...
+                </>
+              ) : (
+                editingPackage ? 'Salvar' : 'Criar Pacote'
+              )}
             </Button>
           </DialogFooter>
         </DialogContent>
