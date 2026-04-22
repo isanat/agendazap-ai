@@ -251,6 +251,240 @@ async function sendWhatsAppMessage(
 }
 
 /**
+ * Send a WhatsApp interactive button message via Evolution API
+ * Creates a message with clickable buttons
+ */
+async function sendWhatsAppButtons(
+  instanceName: string,
+  phone: string,
+  title: string,
+  description: string,
+  buttons: { id: string; text: string }[]
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const systemConfig = await getEvolutionApiConfig();
+    if (!systemConfig) {
+      return { success: false, error: 'Evolution API not configured' };
+    }
+
+    let formattedPhone = phone.replace(/\D/g, '');
+    if (!formattedPhone.includes('@')) {
+      if (!isValidPhoneNumber(formattedPhone)) {
+        return { success: false, error: `Invalid phone number for buttons: ${formattedPhone}` };
+      }
+      if (!formattedPhone.startsWith('55') && formattedPhone.length >= 10 && formattedPhone.length <= 11) {
+        formattedPhone = '55' + formattedPhone;
+      }
+    }
+
+    // Evolution API v2 sendButtons format
+    const body = {
+      number: formattedPhone,
+      options: { delay: 1200, presence: 'composing' },
+      titleMessage: { text: title },
+      descriptionMessage: { text: description },
+      buttons: buttons.map(b => ({
+        buttonId: b.id,
+        buttonText: { displayText: b.text },
+      })),
+    };
+
+    console.log(`[Webhook] 🔘 Sending interactive buttons to ${formattedPhone}: ${buttons.map(b => b.text).join(', ')}`);
+
+    const response = await fetch(`${systemConfig.apiUrl}/message/sendButtons/${instanceName}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': systemConfig.apiKey,
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`[Webhook] sendButtons API error: ${response.status} - ${errorText.substring(0, 200)}`);
+      return { success: false, error: `sendButtons API error: ${response.status}` };
+    }
+
+    console.log(`[Webhook] ✅ Interactive buttons sent to ${formattedPhone}`);
+    return { success: true };
+  } catch (error) {
+    console.error('[Webhook] sendButtons error:', error);
+    return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+  }
+}
+
+/**
+ * Send a WhatsApp link preview message via Evolution API
+ * Creates a message with a clickable URL preview card
+ */
+async function sendWhatsAppLinkMessage(
+  instanceName: string,
+  phone: string,
+  text: string,
+  url: string,
+  title: string,
+  description: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const systemConfig = await getEvolutionApiConfig();
+    if (!systemConfig) {
+      return { success: false, error: 'Evolution API not configured' };
+    }
+
+    let formattedPhone = phone.replace(/\D/g, '');
+    if (!formattedPhone.includes('@')) {
+      if (!isValidPhoneNumber(formattedPhone)) {
+        return { success: false, error: `Invalid phone number for link: ${formattedPhone}` };
+      }
+      if (!formattedPhone.startsWith('55') && formattedPhone.length >= 10 && formattedPhone.length <= 11) {
+        formattedPhone = '55' + formattedPhone;
+      }
+    }
+
+    // Evolution API sendLink format
+    const body = {
+      number: formattedPhone,
+      options: { delay: 1200, presence: 'composing' },
+      linkPreview: {
+        url,
+        title,
+        description,
+      },
+      textMessage: { text },
+    };
+
+    console.log(`[Webhook] 🔗 Sending link message to ${formattedPhone}: ${url}`);
+
+    const response = await fetch(`${systemConfig.apiUrl}/message/sendLink/${instanceName}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': systemConfig.apiKey,
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`[Webhook] sendLink API error: ${response.status} - ${errorText.substring(0, 200)}`);
+      return { success: false, error: `sendLink API error: ${response.status}` };
+    }
+
+    console.log(`[Webhook] ✅ Link message sent to ${formattedPhone}`);
+    return { success: true };
+  } catch (error) {
+    console.error('[Webhook] sendLink error:', error);
+    return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+  }
+}
+
+/**
+ * Send PIX payment information via WhatsApp with interactive features
+ * Sends: 1) Text confirmation  2) PIX code (easy to copy)  3) Interactive button with payment link
+ */
+async function sendPixPaymentMessage(
+  accountId: string,
+  phone: string,
+  confirmationText: string,
+  pixData: { qrCode?: string; ticketUrl?: string; deepLink?: string }
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const systemConfig = await getEvolutionApiConfig();
+    if (!systemConfig) {
+      // Fallback: send as plain text
+      return await sendWhatsAppMessage(accountId, phone, confirmationText);
+    }
+
+    const integration = await db.integration.findUnique({
+      where: { accountId_type: { accountId, type: 'whatsapp' } }
+    });
+    if (!integration) {
+      return await sendWhatsAppMessage(accountId, phone, confirmationText);
+    }
+
+    const credentials = typeof integration.credentials === 'string'
+      ? JSON.parse(integration.credentials)
+      : integration.credentials;
+    const instanceName = credentials.instanceName;
+    if (!instanceName) {
+      return await sendWhatsAppMessage(accountId, phone, confirmationText);
+    }
+
+    let formattedPhone = phone.replace(/\D/g, '');
+    if (!isValidPhoneNumber(formattedPhone)) {
+      // Can't send interactive messages to invalid numbers, fall back to text
+      return await sendWhatsAppMessage(accountId, phone, confirmationText);
+    }
+    if (!formattedPhone.startsWith('55') && formattedPhone.length >= 10 && formattedPhone.length <= 11) {
+      formattedPhone = '55' + formattedPhone;
+    }
+
+    // Step 1: Send the confirmation text (without PIX code)
+    const textResult = await sendWhatsAppMessage(accountId, phone, confirmationText);
+    if (!textResult.success) {
+      console.error(`[Webhook] Failed to send confirmation text: ${textResult.error}`);
+      // Still try to send PIX info
+    }
+
+    // Step 2: Send PIX code in a SEPARATE message for easy copying
+    if (pixData.qrCode) {
+      const pixCodeMessage = `📋 *PIX Copia e Cola:*\n\n${pixData.qrCode}\n\n⏰ Expira em 1 hora. Após pagar, seu agendamento será confirmado automaticamente!`;
+      
+      // Small delay between messages
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      const pixCodeResult = await sendWhatsAppMessage(accountId, phone, pixCodeMessage);
+      if (!pixCodeResult.success) {
+        console.error(`[Webhook] Failed to send PIX code: ${pixCodeResult.error}`);
+      }
+    }
+
+    // Step 3: Send interactive button or link for payment
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    
+    if (pixData.ticketUrl) {
+      // Try interactive buttons first
+      const buttonResult = await sendWhatsAppButtons(
+        instanceName,
+        formattedPhone,
+        '💳 Pagamento PIX',
+        'Clique no botão abaixo para pagar agora:',
+        [{ id: 'pay_pix_now', text: '💳 Pagar Agora' }]
+      );
+
+      if (!buttonResult.success) {
+        // Fallback: send as link message
+        console.log(`[Webhook] Buttons failed, trying link message...`);
+        const linkResult = await sendWhatsAppLinkMessage(
+          instanceName,
+          formattedPhone,
+          `💳 Clique para pagar: ${pixData.ticketUrl}`,
+          pixData.ticketUrl,
+          'Pagar PIX - AgendZap',
+          'Clique para abrir a página de pagamento'
+        );
+
+        if (!linkResult.success) {
+          // Last fallback: just send the URL as text (WhatsApp auto-makes it clickable)
+          console.log(`[Webhook] Link message failed, sending URL as text...`);
+          await sendWhatsAppMessage(accountId, phone, `💳 Clique aqui para pagar: ${pixData.ticketUrl}`);
+        }
+      }
+    } else if (pixData.deepLink) {
+      // No ticket URL but have deep link - send as clickable text
+      await sendWhatsAppMessage(accountId, phone, `📱 Pagar pelo app do banco: ${pixData.deepLink}`);
+    }
+
+    return { success: true };
+  } catch (error) {
+    console.error('[Webhook] sendPixPaymentMessage error:', error);
+    // Fallback to plain text
+    return await sendWhatsAppMessage(accountId, phone, confirmationText);
+  }
+}
+
+/**
  * Download media from Evolution API
  */
 async function downloadMedia(
@@ -1522,18 +1756,10 @@ async function processMessageWithAI(
         }
       }
       
-      // Build the response, appending PIX info if available
+      // Build the response - PIX info is now sent as separate messages via sendPixPaymentMessage
+      // so we keep the AI response clean and focused on the appointment confirmation
       let response = cleanedResponse;
-      if (pixInfo?.qrCode) {
-        response += `\n\n💳 **Pague agora via PIX:**\n📋 Copia e Cola:\n${pixInfo.qrCode}`;
-        if (pixInfo.deepLink) {
-          response += `\n\n📱 Link direto para app do banco: ${pixInfo.deepLink}`;
-        }
-        response += '\n\n⏰ O PIX expira em 1 hora. Após o pagamento, seu agendamento será confirmado automaticamente!';
-      } else if (pixInfo?.ticketUrl) {
-        response += `\n\n💳 Link para pagamento PIX: ${pixInfo.ticketUrl}`;
-        response += '\n\n⏰ Após o pagamento, seu agendamento será confirmado automaticamente!';
-      }
+      const hasPixData = !!(pixInfo?.qrCode || pixInfo?.ticketUrl);
       const aiTime = Date.now() - processStart;
       console.log(`[Webhook] 🤖 AI response generated in ${aiTime}ms: "${response.substring(0, 80)}..."`);
       
@@ -1599,12 +1825,20 @@ async function processMessageWithAI(
       let sentViaMethod = 'none';
       
       if (!isLidIdentifier(phoneForSending) && isValidPhoneNumber(phoneForSending.replace(/\D/g, ''))) {
-        // We have a valid real phone number - try sending to it first
-        console.log(`[Webhook] 📤 Sending WhatsApp message to ${phoneForSending}...`);
-        finalSendResult = await sendWhatsAppMessage(accountId, phoneForSending, response);
+        // We have a valid real phone number
+        if (hasPixData && pixInfo) {
+          // PIX payment available - use the multi-step PIX message sender
+          console.log(`[Webhook] 📤 Sending PIX payment messages to ${phoneForSending}...`);
+          finalSendResult = await sendPixPaymentMessage(accountId, phoneForSending, response, pixInfo);
+          sentViaMethod = finalSendResult.success ? 'pix-interactive' : 'pix-failed';
+        } else {
+          // Regular text message
+          console.log(`[Webhook] 📤 Sending WhatsApp message to ${phoneForSending}...`);
+          finalSendResult = await sendWhatsAppMessage(accountId, phoneForSending, response);
+        }
         
         if (finalSendResult.success) {
-          sentViaMethod = 'phone';
+          if (sentViaMethod === 'none') sentViaMethod = 'phone';
           console.log(`[Webhook] ✅ Message sent successfully to phone ${phoneForSending}`);
         } else {
           console.error(`[Webhook] ❌ Failed to send to phone ${phoneForSending}: ${finalSendResult.error}`);
