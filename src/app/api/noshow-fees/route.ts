@@ -68,7 +68,7 @@ export async function GET(request: NextRequest) {
 export async function PUT(request: NextRequest) {
   try {
     const body = await request.json()
-    const { id, paid, paidAt, reminderSent } = body
+    const { id, paid, paidAt, reminderSent, pixQrCode, pixDeepLink, pixId } = body
 
     if (!id) {
       return NextResponse.json({ error: 'Fee ID required' }, { status: 400 })
@@ -85,6 +85,18 @@ export async function PUT(request: NextRequest) {
 
     if (reminderSent !== undefined) {
       updateData.reminderSent = reminderSent
+    }
+
+    if (pixQrCode !== undefined) {
+      updateData.pixQrCode = pixQrCode
+    }
+
+    if (pixDeepLink !== undefined) {
+      updateData.pixDeepLink = pixDeepLink
+    }
+
+    if (pixId !== undefined) {
+      updateData.pixId = pixId
     }
 
     const fee = await db.noShowFee.update({

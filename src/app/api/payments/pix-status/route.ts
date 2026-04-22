@@ -1,5 +1,34 @@
 import { db } from '@/lib/db'
 import { NextRequest, NextResponse } from 'next/server'
+import { getAuthUser } from '@/lib/auth-helpers'
+
+/**
+ * Verify that the request is authorized to modify PIX payment status.
+ * Accepts either:
+ * 1. An authenticated user via getAuthUser (JWT cookie or auth headers)
+ * 2. An internal system call with x-internal-secret header matching INTERNAL_API_SECRET env var
+ */
+async function verifyPixStatusAuth(request: NextRequest): Promise<boolean> {
+  // Method 1: Check for internal system secret
+  const internalSecret = request.headers.get('x-internal-secret')
+  if (internalSecret) {
+    const expectedSecret = process.env.INTERNAL_API_SECRET
+    if (expectedSecret && internalSecret === expectedSecret) {
+      return true
+    }
+    // If the header is present but doesn't match, reject immediately
+    console.warn('[pix-status] Invalid internal secret provided')
+    return false
+  }
+
+  // Method 2: Check for authenticated user
+  const authUser = await getAuthUser(request)
+  if (authUser) {
+    return true
+  }
+
+  return false
+}
 
 /**
  * GET /api/payments/pix-status?appointmentId=xxx
@@ -83,10 +112,26 @@ export async function GET(request: NextRequest) {
 
 /**
  * POST /api/payments/pix-status
- * Mark a PIX payment as paid (called by MercadoPago webhook or manually)
+ * Mark a PIX payment as paid (called by authenticated users or internal system)
+ * 
+ * SECURITY: This endpoint is now protected. Only accepts requests from:
+ * 1. Authenticated users (via getAuthUser)
+ * 2. Internal system calls with x-internal-secret header
+ * 
+ * The Mercado Pago webhook has its own dedicated endpoint at
+ * /api/payments/mercadopago/webhook and should NOT use this endpoint.
  */
 export async function POST(request: NextRequest) {
   try {
+    // Verify authorization before processing
+    const isAuthorized = await verifyPixStatusAuth(request)
+    if (!isAuthorized) {
+      return NextResponse.json(
+        { error: 'Unauthorized - authentication required' },
+        { status: 401 }
+      )
+    }
+
     const body = await request.json()
     const { appointmentId, noShowFeeId, paid } = body
 

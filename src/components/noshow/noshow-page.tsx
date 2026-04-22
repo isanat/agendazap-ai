@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { AlertTriangle, DollarSign, QrCode, CheckCircle, Clock, Send, Download, TrendingUp, ArrowUpRight, Loader2 } from 'lucide-react'
+import { AlertTriangle, DollarSign, QrCode, CheckCircle, Clock, Send, Download, TrendingUp, ArrowUpRight, Loader2, Copy, X } from 'lucide-react'
 import { authFetch } from '@/lib/auth-fetch'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -9,6 +9,13 @@ import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Progress } from '@/components/ui/progress'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import {
   Table,
   TableBody,
@@ -24,6 +31,7 @@ import { getStoredAccountId } from '@/hooks/use-data'
 
 interface NoShowFee {
   id: string
+  appointmentId: string
   clientName: string
   clientPhone: string
   serviceName: string
@@ -31,6 +39,20 @@ interface NoShowFee {
   amount: number
   status: 'pending' | 'paid' | 'expired'
   paidAt?: string
+  pixQrCode?: string | null
+  pixDeepLink?: string | null
+  pixId?: string | null
+  reminderSent?: boolean
+  createdAt?: string
+}
+
+interface PixDialogData {
+  fee: NoShowFee
+  qrCode: string | null
+  deepLink: string | null
+  amount: number
+  clientName: string
+  serviceName: string
 }
 
 export function NoshowPage() {
@@ -39,6 +61,9 @@ export function NoshowPage() {
   const [error, setError] = useState<string | null>(null)
 
   const [accountId, setAccountId] = useState<string | null>(null)
+  const [pixGenerating, setPixGenerating] = useState<string | null>(null) // fee ID being generated
+  const [resending, setResending] = useState<string | null>(null) // fee ID being resent
+  const [pixDialog, setPixDialog] = useState<PixDialogData | null>(null)
 
   useEffect(() => {
     const id = getStoredAccountId()
@@ -80,6 +105,188 @@ export function NoshowPage() {
   const totalPending = pendingFees.reduce((acc, f) => acc + f.amount, 0)
   const totalLost = expiredFees.reduce((acc, f) => acc + f.amount, 0)
   const recoveryRate = fees.length > 0 ? Math.round(paidFees.length / fees.length * 100) : 0
+
+  /**
+   * Handle PIX button click:
+   * - If fee already has pixQrCode, show it in a dialog
+   * - Otherwise, generate a new PIX payment via /api/payments/mercadopago
+   *   and update the fee with the returned PIX data
+   */
+  const handlePixClick = async (fee: NoShowFee) => {
+    // If we already have a QR code, just show it
+    if (fee.pixQrCode) {
+      setPixDialog({
+        fee,
+        qrCode: fee.pixQrCode,
+        deepLink: fee.pixDeepLink || null,
+        amount: fee.amount,
+        clientName: fee.clientName,
+        serviceName: fee.serviceName,
+      })
+      return
+    }
+
+    // Generate a new PIX payment
+    setPixGenerating(fee.id)
+    try {
+      const response = await authFetch('/api/payments/mercadopago', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          amount: fee.amount,
+          description: `Taxa no-show: ${fee.serviceName}`,
+          externalReference: `noshow_${fee.id}`,
+          clientName: fee.clientName,
+        }),
+      })
+
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}))
+        throw new Error(errData.error || 'Erro ao gerar PIX')
+      }
+
+      const pixResult = await response.json()
+
+      // Extract PIX data from response
+      const qrCode = pixResult.data?.qrCode || pixResult.data?.qrCodeBase64 || null
+      const deepLink = pixResult.data?.deepLink || null
+      const pixId = pixResult.data?.id ? String(pixResult.data.id) : null
+      const isSimulated = pixResult.simulated || false
+
+      if (!qrCode) {
+        throw new Error('PIX gerado mas sem QR code retornado')
+      }
+
+      // Update the fee in the database with the PIX data
+      const updateResponse = await authFetch('/api/noshow-fees', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: fee.id,
+          pixQrCode: qrCode,
+          pixDeepLink: deepLink,
+          pixId: pixId,
+        }),
+      })
+
+      if (!updateResponse.ok) {
+        console.error('Failed to update fee with PIX data, but PIX was generated')
+      }
+
+      // Update local state
+      setFees(prev => prev.map(f => 
+        f.id === fee.id 
+          ? { ...f, pixQrCode: qrCode, pixDeepLink: deepLink, pixId: pixId }
+          : f
+      ))
+
+      // Show the dialog with the generated PIX
+      setPixDialog({
+        fee: { ...fee, pixQrCode: qrCode, pixDeepLink: deepLink, pixId },
+        qrCode,
+        deepLink,
+        amount: fee.amount,
+        clientName: fee.clientName,
+        serviceName: fee.serviceName,
+      })
+
+      if (isSimulated) {
+        toast.info('PIX gerado em modo simulado (Mercado Pago não conectado)')
+      } else {
+        toast.success('PIX gerado com sucesso!')
+      }
+    } catch (err) {
+      console.error('Error generating PIX:', err)
+      toast.error(err instanceof Error ? err.message : 'Erro ao gerar PIX')
+    } finally {
+      setPixGenerating(null)
+    }
+  }
+
+  /**
+   * Handle Reenviar (resend) button click:
+   * Send a WhatsApp message to the client with the PIX payment code
+   */
+  const handleResend = async (fee: NoShowFee) => {
+    if (!accountId) {
+      toast.error('Conta não encontrada')
+      return
+    }
+
+    setResending(fee.id)
+    try {
+      // Build the message content
+      let message = `Olá ${fee.clientName}! 😊\n\n`
+      message += `Você teve um não comparecimento para o serviço *${fee.serviceName}*.\n\n`
+
+      if (fee.pixQrCode) {
+        message += `💰 Taxa no-show: *R$ ${fee.amount.toFixed(2)}*\n\n`
+        message += `📋 *PIX Copia e Cola:*\n${fee.pixQrCode}\n\n`
+        message += `Efetue o pagamento para regularizar seu cadastro. Obrigado!`
+      } else {
+        message += `💰 Taxa no-show pendente: *R$ ${fee.amount.toFixed(2)}*\n\n`
+        message += `Entre em contato para efetuar o pagamento. Obrigado!`
+      }
+
+      const response = await authFetch('/api/whatsapp/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          accountId,
+          clientPhone: fee.clientPhone,
+          direction: 'outgoing',
+          message,
+          messageType: 'text',
+          intent: 'noshow_reminder',
+          appointmentId: fee.appointmentId,
+        }),
+      })
+
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}))
+        throw new Error(errData.error || 'Erro ao enviar mensagem')
+      }
+
+      // Mark reminder as sent
+      await authFetch('/api/noshow-fees', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: fee.id,
+          reminderSent: true,
+        }),
+      }).catch(() => {
+        // Non-critical - don't fail the whole operation
+        console.warn('Failed to update reminderSent flag')
+      })
+
+      // Update local state
+      setFees(prev => prev.map(f => 
+        f.id === fee.id 
+          ? { ...f, reminderSent: true }
+          : f
+      ))
+
+      toast.success(`Lembrete enviado para ${fee.clientName}!`)
+    } catch (err) {
+      console.error('Error resending reminder:', err)
+      toast.error(err instanceof Error ? err.message : 'Erro ao enviar lembrete')
+    } finally {
+      setResending(null)
+    }
+  }
+
+  /**
+   * Copy PIX code to clipboard
+   */
+  const handleCopyPixCode = async (code: string) => {
+    try {
+      await navigator.clipboard.writeText(code)
+      toast.success('Código PIX copiado!')
+    } catch {
+      toast.error('Erro ao copiar código PIX')
+    }
+  }
 
   const getStatusBadge = (status: string) => {
     switch (status) {
@@ -335,12 +542,30 @@ export function NoshowPage() {
                         <TableCell>{getStatusBadge(fee.status)}</TableCell>
                         <TableCell className="text-right">
                           <div className="flex justify-end gap-2">
-                            <Button size="sm" variant="outline">
-                              <Send className="w-4 h-4 mr-1" />
+                            <Button 
+                              size="sm" 
+                              variant="outline"
+                              onClick={() => handleResend(fee)}
+                              disabled={resending === fee.id}
+                            >
+                              {resending === fee.id ? (
+                                <Loader2 className="w-4 h-4 mr-1 animate-spin" />
+                              ) : (
+                                <Send className="w-4 h-4 mr-1" />
+                              )}
                               Reenviar
                             </Button>
-                            <Button size="sm" className="bg-green-600 hover:bg-green-700">
-                              <QrCode className="w-4 h-4 mr-1" />
+                            <Button 
+                              size="sm" 
+                              className="bg-green-600 hover:bg-green-700"
+                              onClick={() => handlePixClick(fee)}
+                              disabled={pixGenerating === fee.id}
+                            >
+                              {pixGenerating === fee.id ? (
+                                <Loader2 className="w-4 h-4 mr-1 animate-spin" />
+                              ) : (
+                                <QrCode className="w-4 h-4 mr-1" />
+                              )}
                               PIX
                             </Button>
                           </div>
@@ -444,6 +669,80 @@ export function NoshowPage() {
           </Card>
         </TabsContent>
       </Tabs>
+
+      {/* PIX QR Code Dialog */}
+      <Dialog open={!!pixDialog} onOpenChange={(open) => { if (!open) setPixDialog(null) }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <QrCode className="w-5 h-5 text-green-600" />
+              Pagamento PIX
+            </DialogTitle>
+            <DialogDescription>
+              Taxa no-show para {pixDialog?.clientName}
+            </DialogDescription>
+          </DialogHeader>
+          
+          {pixDialog && (
+            <div className="space-y-4">
+              {/* Service and amount info */}
+              <div className="bg-muted/50 rounded-lg p-4 space-y-1">
+                <p className="text-sm text-muted-foreground">Serviço</p>
+                <p className="font-medium">{pixDialog.serviceName}</p>
+                <p className="text-sm text-muted-foreground mt-2">Valor</p>
+                <p className="text-2xl font-bold text-green-600">R$ {pixDialog.amount.toFixed(2)}</p>
+              </div>
+
+              {/* QR Code display */}
+              {pixDialog.qrCode && (
+                <div className="space-y-3">
+                  <p className="text-sm font-medium">Código PIX Copia e Cola:</p>
+                  <div className="bg-white border rounded-lg p-3 relative">
+                    <p className="text-xs font-mono break-all text-gray-800 pr-10 max-h-32 overflow-y-auto">
+                      {pixDialog.qrCode}
+                    </p>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="absolute top-2 right-2 h-8 w-8 p-0"
+                      onClick={() => handleCopyPixCode(pixDialog.qrCode!)}
+                    >
+                      <Copy className="w-4 h-4" />
+                    </Button>
+                  </div>
+                  <Button
+                    className="w-full bg-green-600 hover:bg-green-700"
+                    onClick={() => handleCopyPixCode(pixDialog.qrCode!)}
+                  >
+                    <Copy className="w-4 h-4 mr-2" />
+                    Copiar Código PIX
+                  </Button>
+                </div>
+              )}
+
+              {/* Deep link */}
+              {pixDialog.deepLink && (
+                <div className="text-center">
+                  <a
+                    href={pixDialog.deepLink}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-sm text-primary underline underline-offset-4 hover:text-primary/80"
+                  >
+                    Abrir no app do banco
+                  </a>
+                </div>
+              )}
+
+              {/* Info notice */}
+              <p className="text-xs text-muted-foreground text-center">
+                Envie o código PIX para o cliente via WhatsApp usando o botão &quot;Reenviar&quot;.
+                O pagamento será confirmado automaticamente.
+              </p>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

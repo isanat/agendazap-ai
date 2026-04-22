@@ -2,6 +2,35 @@ import { db } from '@/lib/db'
 import { NextRequest, NextResponse } from 'next/server'
 import { getAuthUser } from '@/lib/auth-helpers'
 
+/**
+ * Verify that the request is authorized to access appointment operations.
+ * Accepts either:
+ * 1. An authenticated user via getAuthUser (JWT cookie or auth headers)
+ * 2. An internal system call with x-internal-secret header matching INTERNAL_API_SECRET env var
+ *    (used by webhooks and other internal services that create appointments programmatically)
+ */
+async function verifyAppointmentAuth(request: NextRequest): Promise<{ authorized: boolean; authUser?: Awaited<ReturnType<typeof getAuthUser>> }> {
+  // Method 1: Check for internal system secret (for webhook/internal calls)
+  const internalSecret = request.headers.get('x-internal-secret')
+  if (internalSecret) {
+    const expectedSecret = process.env.INTERNAL_API_SECRET
+    if (expectedSecret && internalSecret === expectedSecret) {
+      return { authorized: true }
+    }
+    // If the header is present but doesn't match, reject immediately
+    console.warn('[appointments] Invalid internal secret provided')
+    return { authorized: false }
+  }
+
+  // Method 2: Check for authenticated user
+  const authUser = await getAuthUser(request)
+  if (authUser) {
+    return { authorized: true, authUser }
+  }
+
+  return { authorized: false }
+}
+
 // Helper to get effective price for an appointment (considering customPrice)
 async function getEffectivePrice(serviceId: string, professionalId: string): Promise<number> {
   // Check if there's a custom price for this service+professional combo
@@ -105,6 +134,12 @@ async function createPixPayment(
 
 export async function GET(request: NextRequest) {
   try {
+    // Verify authentication
+    const { authorized, authUser } = await verifyAppointmentAuth(request)
+    if (!authorized) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+
     const { searchParams } = new URL(request.url)
     const accountId = searchParams.get('accountId')
     const date = searchParams.get('date')
@@ -113,6 +148,13 @@ export async function GET(request: NextRequest) {
 
     if (!accountId) {
       return NextResponse.json({ error: 'accountId required' }, { status: 400 })
+    }
+
+    // If authenticated via user auth (not internal), verify account access
+    if (authUser) {
+      if (authUser.role !== 'superadmin' && authUser.accountId !== accountId) {
+        return NextResponse.json({ error: 'Forbidden - no access to this account' }, { status: 403 })
+      }
     }
 
     const where: any = { accountId }
@@ -158,6 +200,12 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
+    // Verify authentication
+    const { authorized, authUser } = await verifyAppointmentAuth(request)
+    if (!authorized) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+
     const body = await request.json()
     const { 
       accountId, 
@@ -173,6 +221,13 @@ export async function POST(request: NextRequest) {
 
     if (!accountId || !serviceId || !professionalId || !datetime) {
       return NextResponse.json({ error: 'Missing required fields' }, { status: 400 })
+    }
+
+    // If authenticated via user auth (not internal), verify account access
+    if (authUser) {
+      if (authUser.role !== 'superadmin' && authUser.accountId !== accountId) {
+        return NextResponse.json({ error: 'Forbidden - no access to this account' }, { status: 403 })
+      }
     }
 
     // Get service to calculate end time and check custom pricing
@@ -312,11 +367,28 @@ export async function POST(request: NextRequest) {
 
 export async function PUT(request: NextRequest) {
   try {
+    // Verify authentication
+    const { authorized, authUser } = await verifyAppointmentAuth(request)
+    if (!authorized) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+
     const body = await request.json()
     const { id, status, notes } = body
 
     if (!id) {
       return NextResponse.json({ error: 'Appointment ID required' }, { status: 400 })
+    }
+
+    // If authenticated via user auth (not internal), verify access to this appointment
+    if (authUser && authUser.role !== 'superadmin') {
+      const existingAppointment = await db.appointment.findUnique({
+        where: { id },
+        select: { accountId: true }
+      })
+      if (!existingAppointment || existingAppointment.accountId !== authUser.accountId) {
+        return NextResponse.json({ error: 'Forbidden - no access to this appointment' }, { status: 403 })
+      }
     }
 
     const updateData: any = {}
@@ -406,11 +478,28 @@ export async function PUT(request: NextRequest) {
 
 export async function DELETE(request: NextRequest) {
   try {
+    // Verify authentication
+    const { authorized, authUser } = await verifyAppointmentAuth(request)
+    if (!authorized) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+
     const { searchParams } = new URL(request.url)
     const id = searchParams.get('id')
 
     if (!id) {
       return NextResponse.json({ error: 'Appointment ID required' }, { status: 400 })
+    }
+
+    // If authenticated via user auth (not internal), verify access to this appointment
+    if (authUser && authUser.role !== 'superadmin') {
+      const existingAppointment = await db.appointment.findUnique({
+        where: { id },
+        select: { accountId: true }
+      })
+      if (!existingAppointment || existingAppointment.accountId !== authUser.accountId) {
+        return NextResponse.json({ error: 'Forbidden - no access to this appointment' }, { status: 403 })
+      }
     }
 
     await db.appointment.delete({

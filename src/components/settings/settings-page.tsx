@@ -1,24 +1,21 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
 import { 
   Save, 
   Clock, 
-  DollarSign, 
-  Calendar, 
-  MessageSquare, 
-  Bell, 
   CreditCard, 
+  MessageSquare, 
   Globe, 
   PartyPopper, 
   MapPin, 
-  Plug, 
-  Building2,
   Settings,
-  Sparkles,
-  Check
+  Check,
+  Loader2
 } from 'lucide-react'
+import { toast } from 'sonner'
+import { authFetch } from '@/lib/auth-fetch'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -232,34 +229,110 @@ function SettingRow({
   )
 }
 
-export function SettingsPage() {
-  const [settings, setSettings] = useState({
-    businessName: 'Salão Beleza Total',
-    businessType: 'salon',
-    whatsappNumber: '(11) 99999-0000',
-    timezone: 'America/Sao_Paulo',
-    openingTime: '09:00',
-    closingTime: '18:00',
-    workingDays: ['1', '2', '3', '4', '5'],
-    noShowFeeEnabled: true,
-    noShowFeeAmount: 50,
-    noShowFeeDeadline: 24,
-    reminder24h: true,
-    reminder2h: true,
-    welcomeMessage: 'Olá! Bem-vindo ao {business_name}. Como posso ajudar?',
-    confirmationMessage: 'Perfeito! Seu agendamento está confirmado para {date} às {time}. Te esperamos!',
-    reminderMessage: 'Olá {client_name}! Lembrete: você tem um agendamento em 2h às {time}.',
-    noShowMessage: 'Infelizmente você não compareceu ao seu agendamento. Uma taxa de R$ {fee} foi gerada.',
-  })
+interface SettingsState {
+  businessName: string
+  businessType: string
+  whatsappNumber: string
+  timezone: string
+  openingTime: string
+  closingTime: string
+  workingDays: string[]
+  noShowFeeEnabled: boolean
+  noShowFeeAmount: number
+  noShowFeeDeadline: number
+  reminder24h: boolean
+  reminder2h: boolean
+  welcomeMessage: string
+  confirmationMessage: string
+  reminderMessage: string
+  noShowMessage: string
+}
 
+const defaultSettings: SettingsState = {
+  businessName: '',
+  businessType: 'salon',
+  whatsappNumber: '',
+  timezone: 'America/Sao_Paulo',
+  openingTime: '09:00',
+  closingTime: '18:00',
+  workingDays: ['1', '2', '3', '4', '5'],
+  noShowFeeEnabled: false,
+  noShowFeeAmount: 50,
+  noShowFeeDeadline: 24,
+  reminder24h: true,
+  reminder2h: true,
+  welcomeMessage: 'Olá! Bem-vindo ao {business_name}. Como posso ajudar?',
+  confirmationMessage: 'Perfeito! Seu agendamento está confirmado para {date} às {time}. Te esperamos!',
+  reminderMessage: 'Olá {client_name}! Lembrete: você tem um agendamento em 2h às {time}.',
+  noShowMessage: 'Infelizmente você não compareceu ao seu agendamento. Uma taxa de R$ {fee} foi gerada.',
+}
+
+export function SettingsPage() {
+  const [settings, setSettings] = useState<SettingsState>(defaultSettings)
   const [isSaving, setIsSaving] = useState(false)
+  const [isLoading, setIsLoading] = useState(true)
+
+  const loadSettings = async () => {
+    try {
+      const response = await authFetch('/api/account/me')
+      if (response.ok) {
+        const data = await response.json()
+        const account = data.account || data.Account
+        if (account) {
+          setSettings({
+            businessName: account.businessName || defaultSettings.businessName,
+            businessType: account.businessType || defaultSettings.businessType,
+            whatsappNumber: account.whatsappNumber || defaultSettings.whatsappNumber,
+            timezone: account.timezone || defaultSettings.timezone,
+            openingTime: account.openingTime || defaultSettings.openingTime,
+            closingTime: account.closingTime || defaultSettings.closingTime,
+            workingDays: account.workingDays || defaultSettings.workingDays,
+            noShowFeeEnabled: account.noShowFeeEnabled ?? defaultSettings.noShowFeeEnabled,
+            noShowFeeAmount: account.noShowFeeAmount ?? defaultSettings.noShowFeeAmount,
+            noShowFeeDeadline: account.noShowFeeDeadline ?? defaultSettings.noShowFeeDeadline,
+            reminder24h: account.reminder24h ?? defaultSettings.reminder24h,
+            reminder2h: account.reminder2h ?? defaultSettings.reminder2h,
+            welcomeMessage: account.welcomeMessage || defaultSettings.welcomeMessage,
+            confirmationMessage: account.confirmationMessage || defaultSettings.confirmationMessage,
+            reminderMessage: account.reminderMessage || defaultSettings.reminderMessage,
+            noShowMessage: account.noShowMessage || defaultSettings.noShowMessage,
+          })
+        }
+      }
+    } catch (error) {
+      console.error('Error loading settings:', error)
+      toast.error('Erro ao carregar configurações')
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  // Load settings from the API on mount
+  useEffect(() => {
+    loadSettings()
+  }, [])
 
   const handleSave = async () => {
     setIsSaving(true)
-    // Simulate save
-    await new Promise(resolve => setTimeout(resolve, 1000))
-    setIsSaving(false)
-    alert('Configurações salvas com sucesso!')
+    try {
+      const response = await authFetch('/api/account/me', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(settings)
+      })
+
+      if (response.ok) {
+        toast.success('Configurações salvas com sucesso!')
+      } else {
+        const data = await response.json().catch(() => ({}))
+        throw new Error(data.error || 'Erro ao salvar configurações')
+      }
+    } catch (error) {
+      console.error('Error saving settings:', error)
+      toast.error(error instanceof Error ? error.message : 'Erro ao salvar configurações')
+    } finally {
+      setIsSaving(false)
+    }
   }
 
   const weekDays = [
@@ -271,6 +344,14 @@ export function SettingsPage() {
     { value: '5', label: 'Sexta' },
     { value: '6', label: 'Sábado' },
   ]
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-[400px]">
+        <Loader2 className="w-8 h-8 animate-spin text-muted-foreground" />
+      </div>
+    )
+  }
 
   return (
     <div className="space-y-6">
