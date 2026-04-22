@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
+import { getAuthUser } from '@/lib/auth-helpers';
 
 // GET - Buscar configurações do sistema (para tenants)
 export async function GET(request: NextRequest) {
@@ -51,47 +52,29 @@ export async function GET(request: NextRequest) {
 // PUT - Update system configuration (superadmin or owner)
 export async function PUT(request: NextRequest) {
   try {
-    // Check for authorization - superadmin OR owner of an account
-    const cookieHeader = request.headers.get('cookie');
+    // Use the proper auth helper that supports both JWT cookie and header-based auth
+    const authUser = await getAuthUser(request);
     
-    let isAuthorized = false;
-    
-    if (cookieHeader) {
-      const cookies: Record<string, string> = {};
-      cookieHeader.split(';').forEach(cookie => {
-        const trimmed = cookie.trim();
-        const equalIndex = trimmed.indexOf('=');
-        if (equalIndex > 0) {
-          cookies[trimmed.substring(0, equalIndex)] = trimmed.substring(equalIndex + 1);
-        }
-      });
-      
-      if (cookies['agendazap_session']) {
-        try {
-          const { verifyAccessToken } = await import('@/lib/jwt');
-          const payload = await verifyAccessToken(cookies['agendazap_session']);
-          if (payload && (payload.role === 'superadmin' || payload.role === 'owner')) {
-            isAuthorized = true;
-          }
-        } catch {
-          // Token invalid
-        }
-      }
+    if (!authUser) {
+      return NextResponse.json({ error: 'Não autorizado' }, { status: 401 });
     }
-    
-    // Also check header-based auth
-    if (!isAuthorized) {
-      const userId = request.headers.get('x-user-id');
-      if (userId) {
-        const user = await db.user.findUnique({ where: { id: userId } });
-        if (user && (user.role === 'superadmin' || user.role === 'owner')) {
-          isAuthorized = true;
-        }
-      }
+
+    // Verify user exists in DB and has proper role
+    const user = await db.user.findUnique({
+      where: { id: authUser.id },
+      include: { Account: true }
+    });
+
+    if (!user || !user.isActive) {
+      return NextResponse.json({ error: 'Usuário não encontrado ou inativo' }, { status: 401 });
     }
-    
-    if (!isAuthorized) {
-      return NextResponse.json({ error: 'Apenas administradores podem alterar configurações do sistema' }, { status: 403 });
+
+    // Allow both superadmin and owner roles
+    if (user.role !== 'superadmin' && user.role !== 'owner') {
+      return NextResponse.json(
+        { error: 'Apenas administradores podem alterar configurações do sistema' },
+        { status: 403 }
+      );
     }
     
     const body = await request.json();
