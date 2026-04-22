@@ -751,6 +751,15 @@ ${clientContext}
 - Se faz 2+ semanas sem vir, sugira retorno. Se cancelou, pergunte remarcar
 - Pagamento: PIX, cartão, dinheiro ou presencialmente
 
+=== PAGAMENTO PIX AUTOMÁTICO ===
+IMPORTANTE: Quando o cliente escolher PIX como forma de pagamento, o sistema GERA AUTOMATICAMENTE um QR Code PIX e o código "Copia e Cola" para pagamento imediato!
+- Informe ao cliente que o QR Code PIX será enviado para pagamento imediato
+- Diga: "Vou gerar o QR Code PIX para você pagar agora!" ou similar
+- O sistema adiciona automaticamente o código PIX após sua mensagem
+- NUNCA diga que o pagamento é só presencial ou que não gera QR Code
+- Se o cliente perguntar se pode pagar agora, diga SIM e que o QR Code será gerado
+- Após o pagamento PIX, o agendamento é confirmado automaticamente
+
 === AGENDAMENTO AUTOMÁTICO ===
 Quando o cliente CONFIRMAR o agendamento (disser "sim", "pode ser", "perfeito", "confirmo", etc.), inclua NO FINAL da sua resposta uma linha com o formato:
 [AGENDAR:serviceName:professionalName:YYYY-MM-DD:HH:mm:paymentMethod]
@@ -763,6 +772,7 @@ Regras:
 - Data no formato YYYY-MM-DD, hora no formato HH:mm (24h)
 - paymentMethod: pix, credit_card, debit_card, cash ou in_person
 - NÃO mencione o formato [AGENDAR:] no texto da mensagem, ele é automático
+- Quando o paymentMethod for "pix", INFORME que o QR Code será gerado para pagamento imediato
 
 Seja acolhedora, prestativa e INTELIGENTE!`;
 }

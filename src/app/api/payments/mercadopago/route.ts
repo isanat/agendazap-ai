@@ -51,9 +51,43 @@ async function ensureValidToken(accountId: string, config: MPConfig): Promise<st
   // If token expires in less than 5 minutes, refresh it
   const fiveMinutes = 5 * 60 * 1000;
   if (config.expiresAt.getTime() - Date.now() < fiveMinutes) {
-    // In production, implement token refresh
-    // For now, return existing token
-    console.log('[Mercado Pago] Token may need refresh for account:', accountId);
+    console.log('[Mercado Pago] Token expiring soon, attempting refresh for account:', accountId);
+    try {
+      const clientId = process.env.MP_CLIENT_ID;
+      const clientSecret = process.env.MP_CLIENT_SECRET;
+      if (clientId && clientSecret && config.refreshToken) {
+        const refreshResponse = await fetch('https://api.mercadopago.com/oauth/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({
+            grant_type: 'refresh_token',
+            client_id: clientId,
+            client_secret: clientSecret,
+            refresh_token: config.refreshToken,
+          }),
+        });
+        if (refreshResponse.ok) {
+          const tokens = await refreshResponse.json();
+          const newExpiresAt = new Date(Date.now() + (tokens.expires_in || 21600) * 1000);
+          const { encryptCredentials } = await import('@/app/api/integrations/route');
+          const encryptedCredentials = encryptCredentials({
+            accessToken: tokens.access_token,
+            refreshToken: tokens.refresh_token || config.refreshToken,
+            expiresAt: newExpiresAt.toISOString(),
+          });
+          await db.integration.update({
+            where: { accountId_type: { accountId, type: 'mercadopago' } },
+            data: { credentials: encryptedCredentials, lastSync: new Date() },
+          });
+          console.log('[Mercado Pago] Token refreshed successfully for account:', accountId);
+          return tokens.access_token;
+        } else {
+          console.error('[Mercado Pago] Token refresh failed:', refreshResponse.status);
+        }
+      }
+    } catch (refreshError) {
+      console.error('[Mercado Pago] Token refresh error:', refreshError);
+    }
   }
   return config.accessToken;
 }
@@ -114,6 +148,7 @@ export async function POST(request: NextRequest) {
     const accessToken = await ensureValidToken(authUser.accountId, config);
     const expirationDate = new Date(Date.now() + expiresInSeconds * 1000).toISOString();
     const apiBaseUrl = 'https://api.mercadopago.com';
+    const idempotencyKey = `agendazap_${authUser.accountId}_${Date.now()}`;
 
     // Create payment using Mercado Pago API
     const response = await fetch(`${apiBaseUrl}/v1/payments`, {
@@ -121,6 +156,7 @@ export async function POST(request: NextRequest) {
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${accessToken}`,
+        'X-Idempotency-Key': idempotencyKey,
       },
       body: JSON.stringify({
         transaction_amount: amount,

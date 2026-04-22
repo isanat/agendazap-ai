@@ -1116,7 +1116,7 @@ async function createAppointmentFromBooking(
     time: string;
     paymentMethod: string;
   }
-): Promise<{ success: boolean; appointmentId?: string; error?: string; pixData?: { qrCode?: string; qrCodeBase64?: string; ticketUrl?: string } }> {
+): Promise<{ success: boolean; appointmentId?: string; error?: string; pixData?: { qrCode?: string; qrCodeBase64?: string; ticketUrl?: string; deepLink?: string } }> {
   try {
     console.log(`[Webhook] Creating appointment: service="${booking.serviceName}", professional="${booking.professionalName}", date=${booking.date}, time=${booking.time}, payment=${booking.paymentMethod}`);
     
@@ -1165,7 +1165,7 @@ async function createAppointmentFromBooking(
     // Calculate end time based on service duration
     const endTime = new Date(datetime.getTime() + foundService.durationMinutes * 60000);
     
-    // Check for conflicting appointments
+    // Check for conflicting appointments - ALSO catches duplicates from the same client
     const conflicts = await db.appointment.findMany({
       where: {
         accountId,
@@ -1177,6 +1177,14 @@ async function createAppointmentFromBooking(
     });
     
     if (conflicts.length > 0) {
+      // Check if this is a duplicate from the SAME client (they said "perfeito" after already booking)
+      const duplicateFromSameClient = conflicts.find(c => c.clientId === clientId);
+      if (duplicateFromSameClient) {
+        console.log(`[Webhook] Duplicate booking from same client - appointment already exists: ${duplicateFromSameClient.id}`);
+        // Return the existing appointment instead of creating a new one
+        const existingPixData = duplicateFromSameClient.pixQrCode ? { qrCode: duplicateFromSameClient.pixQrCode || undefined } : undefined;
+        return { success: true, appointmentId: duplicateFromSameClient.id, pixData: existingPixData };
+      }
       console.log(`[Webhook] Time slot conflict for ${booking.date} at ${booking.time}`);
       return { success: false, error: 'Time slot already booked' };
     }
@@ -1214,7 +1222,7 @@ async function createAppointmentFromBooking(
     }).catch(() => {});
 
     // Generate PIX payment if Mercado Pago is connected and payment method is pix
-    let pixData: { qrCode?: string; qrCodeBase64?: string; ticketUrl?: string } | undefined;
+    let pixData: { qrCode?: string; qrCodeBase64?: string; ticketUrl?: string; deepLink?: string } | undefined;
     
     if (booking.paymentMethod === 'pix' && foundService.price > 0) {
       try {
@@ -1240,7 +1248,7 @@ async function generatePixPayment(
   appointmentId: string,
   amount: number,
   description: string
-): Promise<{ qrCode?: string; qrCodeBase64?: string; ticketUrl?: string } | undefined> {
+): Promise<{ qrCode?: string; qrCodeBase64?: string; ticketUrl?: string; deepLink?: string } | undefined> {
   try {
     // Check if Mercado Pago is connected for this account
     const integration = await db.integration.findUnique({
@@ -1252,30 +1260,38 @@ async function generatePixPayment(
       return undefined;
     }
 
-    const credentials = decryptCredentials(integration.credentials);
-    const accessToken = credentials.accessToken as string;
+    let credentials = decryptCredentials(integration.credentials);
+    let accessToken = credentials.accessToken as string;
     const expiresAt = credentials.expiresAt ? new Date(credentials.expiresAt as string) : null;
     
-    // Check if token is expired
-    if (expiresAt && expiresAt.getTime() < Date.now()) {
-      // Try to refresh the token
-      console.log(`[Webhook] Mercado Pago token expired, attempting refresh...`);
+    // Check if token is expired or about to expire (5 min buffer)
+    if (expiresAt && expiresAt.getTime() - Date.now() < 5 * 60 * 1000) {
+      console.log(`[Webhook] Mercado Pago token expired/expiring, attempting refresh...`);
       const refreshed = await refreshMercadoPagoToken(accountId, credentials.refreshToken as string);
       if (!refreshed) {
         console.log(`[Webhook] Token refresh failed, skipping PIX generation`);
         return undefined;
       }
+      // Re-read the updated credentials after refresh
+      const updatedIntegration = await db.integration.findUnique({
+        where: { accountId_type: { accountId, type: 'mercadopago' } }
+      });
+      if (updatedIntegration) {
+        credentials = decryptCredentials(updatedIntegration.credentials);
+        accessToken = credentials.accessToken as string;
+      }
     }
 
-    const currentAccessToken = accessToken;
     const expirationDate = new Date(Date.now() + 3600 * 1000).toISOString(); // 1 hour
+    const idempotencyKey = `agendazap_${appointmentId}_${Date.now()}`;
 
     // Create PIX payment via Mercado Pago API
     const response = await fetch('https://api.mercadopago.com/v1/payments', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${currentAccessToken}`,
+        'Authorization': `Bearer ${accessToken}`,
+        'X-Idempotency-Key': idempotencyKey,
       },
       body: JSON.stringify({
         transaction_amount: amount,
@@ -1291,27 +1307,35 @@ async function generatePixPayment(
 
     if (!response.ok) {
       const error = await response.text();
-      console.error(`[Webhook] Mercado Pago API error: ${response.status} - ${error.substring(0, 200)}`);
+      console.error(`[Webhook] Mercado Pago API error: ${response.status} - ${error.substring(0, 300)}`);
       return undefined;
     }
 
     const data = await response.json();
+    const pixQrCode = data.point_of_interaction?.transaction_data?.qr_code || null;
+    const pixDeepLink = data.point_of_interaction?.transaction_data?.bank_info?.deep_link || null;
+    const pixQrCodeBase64 = data.point_of_interaction?.transaction_data?.qr_code_base64 || null;
+    const pixTicketUrl = data.point_of_interaction?.transaction_data?.ticket_url || null;
     
-    // Update appointment with PIX data
+    // Update appointment with all PIX data including payment ID
     await db.appointment.update({
       where: { id: appointmentId },
       data: {
-        pixQrCode: data.point_of_interaction?.transaction_data?.qr_code || null,
+        pixId: String(data.id),
+        pixQrCode,
+        pixDeepLink,
+        pixExpiresAt: new Date(expirationDate),
         status: 'pending',
       }
     });
 
-    console.log(`[Webhook] ✅ PIX payment created: ${data.id} for appointment ${appointmentId}`);
+    console.log(`[Webhook] ✅ PIX payment created: MP ID ${data.id} for appointment ${appointmentId}`);
     
     return {
-      qrCode: data.point_of_interaction?.transaction_data?.qr_code,
-      qrCodeBase64: data.point_of_interaction?.transaction_data?.qr_code_base64,
-      ticketUrl: data.point_of_interaction?.transaction_data?.ticket_url,
+      qrCode: pixQrCode,
+      qrCodeBase64: pixQrCodeBase64,
+      ticketUrl: pixTicketUrl,
+      deepLink: pixDeepLink,
     };
   } catch (error) {
     console.error('[Webhook] Error generating PIX payment:', error);
@@ -1483,7 +1507,7 @@ async function processMessageWithAI(
       
       // Create appointment if booking command was found
       let appointmentId: string | undefined;
-      let pixInfo: { qrCode?: string; ticketUrl?: string } | undefined;
+      let pixInfo: { qrCode?: string; ticketUrl?: string; deepLink?: string } | undefined;
       if (booking) {
         console.log(`[Webhook] 📅 Booking command detected: ${booking.serviceName} with ${booking.professionalName} on ${booking.date} at ${booking.time}`);
         const bookingResult = await createAppointmentFromBooking(accountId, clientId, booking);
@@ -1501,9 +1525,14 @@ async function processMessageWithAI(
       // Build the response, appending PIX info if available
       let response = cleanedResponse;
       if (pixInfo?.qrCode) {
-        response += `\n\n💳 PIX Copia e Cola:\n${pixInfo.qrCode}`;
+        response += `\n\n💳 **Pague agora via PIX:**\n📋 Copia e Cola:\n${pixInfo.qrCode}`;
+        if (pixInfo.deepLink) {
+          response += `\n\n📱 Link direto para app do banco: ${pixInfo.deepLink}`;
+        }
+        response += '\n\n⏰ O PIX expira em 1 hora. Após o pagamento, seu agendamento será confirmado automaticamente!';
       } else if (pixInfo?.ticketUrl) {
         response += `\n\n💳 Link para pagamento PIX: ${pixInfo.ticketUrl}`;
+        response += '\n\n⏰ Após o pagamento, seu agendamento será confirmado automaticamente!';
       }
       const aiTime = Date.now() - processStart;
       console.log(`[Webhook] 🤖 AI response generated in ${aiTime}ms: "${response.substring(0, 80)}..."`);
