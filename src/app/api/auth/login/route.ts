@@ -40,30 +40,21 @@ export async function POST(request: NextRequest) {
     const isLegacyHash = !user.password.startsWith('$2');
 
     if (isLegacyHash) {
-      // Migrate the password to bcrypt automatically for superadmin
-      if (user.role === 'superadmin') {
-        console.log('[Login] Auto-migrating superadmin password to bcrypt...');
-        const { hash } = await import('bcryptjs');
-        const hashedPassword = await hash(password, 12);
-        await db.user.update({
-          where: { id: user.id },
-          data: { password: hashedPassword }
-        });
-        console.log('[Login] Superadmin password migrated successfully!');
-      } else {
-        console.warn(`[Login] User ${user.email} has legacy password hash - password reset required`);
-        return NextResponse.json(
-          {
-            error: 'Por segurança, sua senha precisa ser redefinida. Use a opção "Esqueci minha senha".',
-            requirePasswordReset: true
-          },
-          { status: 401 }
-        );
-      }
+      // Auto-migrate ALL users with legacy password hashes to bcrypt
+      // This allows users to log in with their existing password while
+      // upgrading the hash format for security.
+      console.log(`[Login] Auto-migrating ${user.role} password to bcrypt for ${user.email}...`);
+      const { hash } = await import('bcryptjs');
+      const hashedPassword = await hash(password, 12);
+      await db.user.update({
+        where: { id: user.id },
+        data: { password: hashedPassword }
+      });
+      console.log(`[Login] Password migrated successfully for ${user.email}!`);
     }
 
     // Re-fetch user if we just migrated the password
-    const updatedUser = isLegacyHash && user.role === 'superadmin'
+    const updatedUser = isLegacyHash
       ? await db.user.findUnique({ where: { id: user.id }, include: { Account: true } })
       : user;
 

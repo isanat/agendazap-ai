@@ -571,6 +571,31 @@ async function processIncomingMessage(
     }
   }
   
+  // ADDITIONAL INCOMING DEDUP: Check if we already processed a message with the same
+  // content from the same JID in the last 30 seconds. This catches cases where Evolution API
+  // sends the same message with a DIFFERENT messageId (e.g., MESSAGES_UPSERT + messages.upsert)
+  const remoteJid = data.key?.remoteJid;
+  const incomingText = data.message?.conversation || data.message?.extendedTextMessage?.text || '';
+  if (remoteJid && incomingText) {
+    try {
+      const recentIncoming = await db.whatsappMessage.findFirst({
+        where: {
+          clientPhone: { contains: remoteJid.split('@')[0].slice(-9) },
+          direction: 'incoming',
+          message: incomingText,
+          createdAt: { gt: new Date(Date.now() - 30_000) }, // Last 30 seconds
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (recentIncoming) {
+        console.log(`[Webhook] Skipping duplicate incoming message - same content from ${remoteJid} already processed at ${recentIncoming.createdAt.toISOString()}`);
+        return;
+      }
+    } catch (err) {
+      // Don't block processing if dedup check fails
+      console.warn(`[Webhook] Content-based dedup check failed:`, err);
+    }
+  }
   // Extract phone number or LID identifier from JID
   let phone = extractPhoneFromJid(data.key?.remoteJid);
   
@@ -1165,20 +1190,41 @@ async function processMessageWithAI(
       const aiTime = Date.now() - processStart;
       console.log(`[Webhook] 🤖 AI response generated in ${aiTime}ms: "${response.substring(0, 80)}..."`);
       
-      // RESPONSE-LEVEL DEDUP: Check if we already sent a response to this phone in the last 15 seconds.
+      // RESPONSE-LEVEL DEDUP: Check if we already sent an IDENTICAL response to this phone recently.
       // This prevents duplicate messages when Evolution API retries the webhook or sends duplicate events.
-      const recentOutgoing = await db.whatsappMessage.findFirst({
+      // We check for same message content within the last 60 seconds (not just any outgoing message,
+      // which could block legitimate rapid responses to different messages).
+      const recentDuplicate = await db.whatsappMessage.findFirst({
         where: {
           accountId,
           clientPhone: phoneForContext,
           direction: 'outgoing',
-          createdAt: { gt: new Date(Date.now() - 15_000) }, // Last 15 seconds
+          message: response.substring(0, 500), // Check by content prefix (truncated for DB comparison)
+          createdAt: { gt: new Date(Date.now() - 60_000) }, // Last 60 seconds
         },
         orderBy: { createdAt: 'desc' },
       });
       
-      if (recentOutgoing) {
-        console.log(`[Webhook] ⚠️ Skipping duplicate outgoing message - already sent response to ${phoneForContext} at ${recentOutgoing.createdAt.toISOString()}`);
+      if (recentDuplicate) {
+        console.log(`[Webhook] ⚠️ Skipping duplicate outgoing message - identical response already sent to ${phoneForContext} at ${recentDuplicate.createdAt.toISOString()}`);
+        return;
+      }
+      
+      // ADDITIONAL DEDUP: Also check for ANY outgoing message to this phone in the last 10 seconds
+      // This catches cases where the content differs slightly (e.g., different timestamps) but
+      // the message is essentially a duplicate from a race condition
+      const recentAnyOutgoing = await db.whatsappMessage.findFirst({
+        where: {
+          accountId,
+          clientPhone: phoneForContext,
+          direction: 'outgoing',
+          createdAt: { gt: new Date(Date.now() - 10_000) }, // Last 10 seconds
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+      
+      if (recentAnyOutgoing) {
+        console.log(`[Webhook] ⚠️ Skipping outgoing message - another message was just sent to ${phoneForContext} at ${recentAnyOutgoing.createdAt.toISOString()}`);
         return;
       }
       

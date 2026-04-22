@@ -48,15 +48,13 @@ export async function GET(request: NextRequest) {
   }
 }
 
-// PUT - Update system configuration (superadmin only)
+// PUT - Update system configuration (superadmin or owner)
 export async function PUT(request: NextRequest) {
   try {
-    // Check for superadmin authorization
-    const authHeader = request.headers.get('authorization');
+    // Check for authorization - superadmin OR owner of an account
     const cookieHeader = request.headers.get('cookie');
     
-    // Simple auth check - in production, use proper auth middleware
-    let isSuperadmin = false;
+    let isAuthorized = false;
     
     if (cookieHeader) {
       const cookies: Record<string, string> = {};
@@ -72,8 +70,8 @@ export async function PUT(request: NextRequest) {
         try {
           const { verifyAccessToken } = await import('@/lib/jwt');
           const payload = await verifyAccessToken(cookies['agendazap_session']);
-          if (payload && payload.role === 'superadmin') {
-            isSuperadmin = true;
+          if (payload && (payload.role === 'superadmin' || payload.role === 'owner')) {
+            isAuthorized = true;
           }
         } catch {
           // Token invalid
@@ -82,18 +80,18 @@ export async function PUT(request: NextRequest) {
     }
     
     // Also check header-based auth
-    if (!isSuperadmin) {
+    if (!isAuthorized) {
       const userId = request.headers.get('x-user-id');
       if (userId) {
         const user = await db.user.findUnique({ where: { id: userId } });
-        if (user && user.role === 'superadmin') {
-          isSuperadmin = true;
+        if (user && (user.role === 'superadmin' || user.role === 'owner')) {
+          isAuthorized = true;
         }
       }
     }
     
-    if (!isSuperadmin) {
-      return NextResponse.json({ error: 'Apenas superadministradores podem alterar configurações do sistema' }, { status: 403 });
+    if (!isAuthorized) {
+      return NextResponse.json({ error: 'Apenas administradores podem alterar configurações do sistema' }, { status: 403 });
     }
     
     const body = await request.json();

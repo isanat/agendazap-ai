@@ -42,11 +42,26 @@ export const authOptions: NextAuthOptions = {
           return null
         }
 
-        // Check if user has a legacy hash - reject login for security
+        // Check if user has a legacy hash - auto-migrate to bcrypt
         if (isLegacyHash(user.password)) {
-          // User needs to reset their password
-          console.warn(`User ${user.email} has legacy password hash - password reset required`)
-          return null
+          console.log(`User ${user.email} has legacy password hash - auto-migrating to bcrypt`)
+          const hashedPassword = await hash(credentials.password, 12)
+          await db.user.update({
+            where: { id: user.id },
+            data: { password: hashedPassword }
+          })
+          // After migration, the password will match since we just stored the bcrypt hash
+          const passwordMatch = await compare(credentials.password, hashedPassword)
+          if (!passwordMatch) {
+            return null
+          }
+          return {
+            id: user.id,
+            email: user.email,
+            name: user.name,
+            role: user.role,
+            accountId: user.Account?.id || null,
+          }
         }
 
         // Verify password using bcrypt
