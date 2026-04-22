@@ -1052,11 +1052,24 @@ async function generatePixPayment(
  */
 async function refreshMercadoPagoToken(accountId: string, refreshToken: string): Promise<boolean> {
   try {
-    const clientId = process.env.MP_CLIENT_ID;
-    const clientSecret = process.env.MP_CLIENT_SECRET;
+    let clientId = process.env.MP_CLIENT_ID || '';
+    let clientSecret = process.env.MP_CLIENT_SECRET || '';
+    
+    // If not in env vars, try SystemConfiguration in database
+    if (!clientId || !clientSecret) {
+      try {
+        const config = await db.systemConfiguration.findFirst();
+        if (config) {
+          clientId = clientId || config.mpClientId || '';
+          clientSecret = clientSecret || config.mpClientSecret || '';
+        }
+      } catch (err) {
+        console.error('[Webhook] Error reading MP config from DB:', err);
+      }
+    }
     
     if (!clientId || !clientSecret) {
-      console.log('[Webhook] MP_CLIENT_ID or MP_CLIENT_SECRET not configured, cannot refresh token');
+      console.log('[Webhook] MP_CLIENT_ID or MP_CLIENT_SECRET not configured (env or DB), cannot refresh token');
       return false;
     }
 
