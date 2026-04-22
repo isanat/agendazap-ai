@@ -435,6 +435,7 @@ export function AuthPage({ onLogin }: AuthPageProps) {
                           id="login-password"
                           type={showLoginPassword ? 'text' : 'password'}
                           placeholder="••••••••"
+                          autoComplete="current-password"
                           className="pl-10 pr-10 h-11 ring-1 ring-border/50 focus:ring-2 focus:ring-green-500/50 focus:border-green-500 transition-all duration-300"
                           value={loginData.password}
                           onChange={(e) => setLoginData({ ...loginData, password: e.target.value })}
@@ -598,6 +599,7 @@ export function AuthPage({ onLogin }: AuthPageProps) {
                           id="register-password"
                           type={showRegisterPassword ? 'text' : 'password'}
                           placeholder="Mínimo 8 caracteres"
+                          autoComplete="new-password"
                           className="pl-10 pr-10 h-11"
                           value={registerData.password}
                           onChange={(e) => setRegisterData({ ...registerData, password: e.target.value })}
