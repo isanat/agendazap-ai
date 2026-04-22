@@ -7,6 +7,8 @@ import { encryptCredentials } from '../../route';
  * Handles the callback from Mercado Pago OAuth
  */
 
+const APP_URL = process.env.NEXT_PUBLIC_APP_URL || 'https://agendazap-ai.vercel.app';
+
 // Get MP config from env vars or database
 async function getMPConfig() {
   let clientId = process.env.MP_CLIENT_ID || '';
@@ -40,18 +42,20 @@ export async function GET(request: NextRequest) {
     const code = searchParams.get('code');
     const state = searchParams.get('state');
     const error = searchParams.get('error');
+    const errorDescription = searchParams.get('error_description');
     
-    // Handle OAuth errors
+    // Handle OAuth errors from Mercado Pago
     if (error) {
-      console.error('Mercado Pago OAuth error:', error);
+      console.error('[MP Callback] OAuth error:', error, errorDescription);
       return NextResponse.redirect(
-        new URL('/?tab=settings&integration_error=' + error, request.url)
+        `${APP_URL}/?tab=settings&integration_error=${encodeURIComponent(error)}&error_desc=${encodeURIComponent(errorDescription || '')}`
       );
     }
     
     if (!code || !state) {
+      console.error('[MP Callback] Missing code or state');
       return NextResponse.redirect(
-        new URL('/?tab=settings&integration_error=missing_params', request.url)
+        `${APP_URL}/?tab=settings&integration_error=missing_params`
       );
     }
 
@@ -61,21 +65,25 @@ export async function GET(request: NextRequest) {
     });
 
     if (!oauthState || oauthState.provider !== 'mercadopago') {
+      console.error('[MP Callback] Invalid OAuth state:', state);
       return NextResponse.redirect(
-        new URL('/?tab=settings&integration_error=invalid_state', request.url)
+        `${APP_URL}/?tab=settings&integration_error=invalid_state`
       );
     }
 
     // Check if state is expired
     if (oauthState.expiresAt < new Date()) {
       await db.oAuthState.delete({ where: { id: oauthState.id } });
+      console.error('[MP Callback] Expired OAuth state');
       return NextResponse.redirect(
-        new URL('/?tab=settings&integration_error=expired_state', request.url)
+        `${APP_URL}/?tab=settings&integration_error=expired_state`
       );
     }
     
     // Exchange code for tokens
     const MP_CONFIG = await getMPConfig();
+    console.log('[MP Callback] Exchanging code for tokens, redirect_uri:', MP_CONFIG.redirectUri);
+    
     const tokenResponse = await fetch(`${MP_CONFIG.baseUrl}/oauth/token`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -90,14 +98,16 @@ export async function GET(request: NextRequest) {
     
     if (!tokenResponse.ok) {
       const errorText = await tokenResponse.text();
-      console.error('Token exchange failed:', errorText);
+      console.error('[MP Callback] Token exchange failed:', tokenResponse.status, errorText);
       return NextResponse.redirect(
-        new URL('/?tab=settings&integration_error=token_failed', request.url)
+        `${APP_URL}/?tab=settings&integration_error=token_failed&error_detail=${encodeURIComponent(errorText.substring(0, 200))}`
       );
     }
     
     const tokens = await tokenResponse.json();
     const { access_token, refresh_token, expires_in, user_id } = tokens;
+
+    console.log('[MP Callback] Token exchange successful, MP user_id:', user_id);
 
     // Calculate token expiry
     const expiresAt = new Date(Date.now() + (expires_in || 21600) * 1000); // Default 6 hours
@@ -144,14 +154,16 @@ export async function GET(request: NextRequest) {
     // Clean up OAuth state
     await db.oAuthState.delete({ where: { id: oauthState.id } });
     
+    console.log('[MP Callback] Integration saved successfully for account:', oauthState.accountId);
+    
     // Redirect to success page
     return NextResponse.redirect(
-      new URL('/?tab=settings&integration_success=mercadopago', request.url)
+      `${APP_URL}/?tab=settings&integration_success=mercadopago`
     );
   } catch (error) {
-    console.error('Mercado Pago OAuth callback error:', error);
+    console.error('[MP Callback] Error:', error);
     return NextResponse.redirect(
-      new URL('/?tab=settings&integration_error=unknown', request.url)
+      `${APP_URL}/?tab=settings&integration_error=unknown`
     );
   }
 }
