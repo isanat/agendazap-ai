@@ -149,7 +149,7 @@ async function callZaiPlatform(
     return null;
   }
   
-  const modelToUse = model || 'glm-4-air';
+  const modelToUse = model || 'GLM-4.5-Air';
   console.log(`[AI] Calling Z.ai platform API with model: ${modelToUse}`);
   
   try {
@@ -310,18 +310,23 @@ export async function canAccountUseAI(accountId: string): Promise<{
  * Get the AI model to use based on the account's subscription plan
  * "basic" = cheaper/faster model, "premium" = better quality model
  * 
- * Model mapping:
- * - Z.ai/Zhipu: basic=glm-4-air, premium=glm-4-plus
- * - Groq: basic=llama-3.1-8b-instant, premium=llama-3.1-70b-versatile
+ * Model mapping (updated 2025 - old glm-4-air/glm-4-flash deprecated with error 1211):
+ * - Z.ai Platform (api.z.ai): basic=GLM-4.5-Air, premium=GLM-4.5
+ * - Zhipu Direct API (open.bigmodel.cn): basic=glm-4-flash-250414, premium=glm-4-0520
+ * - Groq: basic=llama-3.3-70b-versatile, premium=llama-3.3-70b-versatile
+ * 
+ * Note: llama-3.1-8b-instant was replaced with llama-3.3-70b-versatile because
+ * the 8b model has a 6000 TPM limit on free tier which is too low for our prompts.
  */
 export function getModelForPlan(aiModelType: string, providerName: string, defaultModel: string): string {
   if (providerName.toLowerCase() === 'zai') {
-    // glm-4-air is the affordable model, glm-4-plus is the premium model
-    // Note: glm-4-flash was deprecated/removed from the API, use glm-4-air instead
-    return aiModelType === 'premium' ? 'glm-4-plus' : 'glm-4-air';
+    // Use GLM-4.5-Air for basic (fast, affordable) and GLM-4.5 for premium
+    // These work on both Z.ai platform and Zhipu direct API
+    return aiModelType === 'premium' ? 'GLM-4.5' : 'GLM-4.5-Air';
   }
   if (providerName.toLowerCase() === 'groq') {
-    return aiModelType === 'premium' ? 'llama-3.1-70b-versatile' : 'llama-3.1-8b-instant';
+    // Use llama-3.3-70b-versatile for both tiers - it has 30K TPM limit (vs 6K for 8b)
+    return 'llama-3.3-70b-versatile';
   }
   // For other providers, use their default model
   return defaultModel;
@@ -373,10 +378,12 @@ export async function trackTokenUsage(
  */
 async function callZhipuAI(
   messages: ChatMessage[],
-  model: string = 'glm-4-air'
+  model: string = 'GLM-4.5-Air'
 ): Promise<{ content: string; inputTokens: number; outputTokens: number }> {
-  // Only try 2-3 models max to stay within Vercel's function timeout
-  const modelFallbacks = [model, 'glm-4-air', 'glm-4-flash'];
+  // Model fallback chain: requested model -> GLM-4.5-Air -> glm-4-flash-250414 -> GLM-4.7-Flash
+  // Updated 2025: glm-4-air and glm-4-flash return error 1211 (model not found)
+  // New valid models: GLM-4.5-Air (Z.ai), glm-4-flash-250414 (Zhipu direct), GLM-4.7-Flash (Z.ai)
+  const modelFallbacks = [model, 'GLM-4.5-Air', 'glm-4-flash-250414', 'GLM-4.7-Flash'];
   
   console.log(`[AI] callZhipuAI: Starting with requested model: ${model}, fallbacks: ${modelFallbacks.join(', ')}`);
   const startTime = Date.now();
@@ -492,7 +499,8 @@ async function callZhipuAI(
   }
   
   // Only try 2 models via direct API (to stay within time budget)
-  const directApiModels = model === 'glm-4-air' ? ['glm-4-air'] : [model, 'glm-4-air'];
+  // Updated 2025: glm-4-air deprecated, use GLM-4.5-Air and glm-4-flash-250414
+  const directApiModels = model === 'GLM-4.5-Air' ? ['GLM-4.5-Air', 'glm-4-flash-250414'] : [model, 'GLM-4.5-Air'];
   
   for (const tryModel of directApiModels) {
     const elapsed = Date.now() - startTime;
@@ -734,7 +742,7 @@ async function callGroq(
   messages: ChatMessage[],
   modelOverride?: string
 ): Promise<{ content: string; inputTokens: number; outputTokens: number }> {
-  const modelToUse = modelOverride || config.model || 'llama-3.1-8b-instant';
+  const modelToUse = modelOverride || config.model || 'llama-3.3-70b-versatile';
   console.log(`[AI] Calling Groq with model: ${modelToUse}`);
   
   const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -928,7 +936,7 @@ export async function checkProvidersHealth(): Promise<Record<string, { status: s
       const messages: ChatMessage[] = [{ role: 'user', content: 'ping' }];
       
       if (provider.name.toLowerCase() === 'zai') {
-        await callZhipuAI(messages, (!provider.model || provider.model === 'default') ? 'glm-4-air' : provider.model);
+        await callZhipuAI(messages, (!provider.model || provider.model === 'default' || provider.model === 'glm-4-air' || provider.model === 'glm-4-flash') ? 'GLM-4.5-Air' : provider.model);
       } else if (provider.name.toLowerCase() === 'groq') {
         await callGroq(provider, messages);
       } else {

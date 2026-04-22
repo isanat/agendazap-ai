@@ -85,7 +85,7 @@ const PROVIDER_PRESETS = [
     name: 'groq',
     displayName: 'Groq (Llama)',
     baseUrl: 'https://api.groq.com/openai/v1',
-    model: 'llama-3.1-8b-instant',
+    model: 'llama-3.3-70b-versatile',
     costPerInputToken: 0.000059, // $0.059 per 1M tokens
     costPerOutputToken: 0.000079, // $0.079 per 1M tokens
   },

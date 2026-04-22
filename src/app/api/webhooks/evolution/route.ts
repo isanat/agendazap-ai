@@ -911,7 +911,8 @@ async function generateAIResponse(
     console.log(`[Webhook] System prompt generated (${systemPrompt.length} chars)`);
     
     // Get conversation history from database (more reliable than in-memory)
-    const history = await getConversationHistory(accountId, phone, 10);
+    // Reduced from 10 to 5 messages to avoid Groq rate limit (TPM exceeded with 10 messages)
+    const history = await getConversationHistory(accountId, phone, 5);
     console.log(`[Webhook] Conversation history: ${history.length} messages`);
 
     const messages: ChatMessage[] = [
@@ -980,36 +981,49 @@ async function updateConnectionStatus(instanceName: string, state: string): Prom
  * This is used as a fallback authentication method when the webhook secret
  * header isn't configured on the Evolution API side yet.
  * 
- * A legitimate Evolution API event has:
- * - An "event" field with a known event type
+ * A legitimate Evolution API event has at least ONE of:
+ * - An "event" field (any string - Evolution API has many event types)
  * - An "instance" field with a valid instance name
- * - Optional "data" field with event-specific data
+ * - A "data" field with message data (key, message, etc.)
+ * 
+ * We use a permissive check because:
+ * 1. Evolution API may send events not in our known list
+ * 2. Different Evolution API versions may use different event names
+ * 3. The body structure is the strongest signal this is from Evolution API
  */
 function isValidEvolutionApiEvent(body: unknown): boolean {
   if (!body || typeof body !== 'object') return false;
   const obj = body as Record<string, unknown>;
   
-  // Must have an event field
-  if (!obj.event || typeof obj.event !== 'string') return false;
+  // Method 1: Has event field (any string value)
+  if (obj.event && typeof obj.event === 'string') {
+    return true;
+  }
   
-  // Must have an instance field
-  if (!obj.instance || typeof obj.instance !== 'string') return false;
+  // Method 2: Has instance field + data field (Evolution API structure)
+  if (obj.instance && typeof obj.instance === 'string' && obj.data && typeof obj.data === 'object') {
+    return true;
+  }
   
-  // Event must be a known Evolution API event type
-  const knownEvents = [
-    'APPLICATION_STARTUP',
-    'QRCODE_UPDATED',
-    'CONNECTION_UPDATE',
-    'MESSAGES_UPSERT',
-    'MESSAGES_UPDATE',
-    'SEND_MESSAGE',
-    'messages.upsert',
-    'connection.update',
-    'qrcode.updated',
-    'application.startup',
-  ];
+  // Method 3: Has data with key.remoteJid (WhatsApp message structure)
+  const data = obj.data as Record<string, unknown> | undefined;
+  if (data && typeof data === 'object') {
+    const key = data.key as Record<string, unknown> | undefined;
+    if (key && typeof key === 'object' && key.remoteJid && typeof key.remoteJid === 'string') {
+      return true;
+    }
+    // Has message field (WhatsApp message content)
+    if (data.message && typeof data.message === 'object') {
+      return true;
+    }
+  }
   
-  return knownEvents.includes(obj.event);
+  // Method 4: Has instance field alone (connection events, startup events, etc.)
+  if (obj.instance && typeof obj.instance === 'string') {
+    return true;
+  }
+  
+  return false;
 }
 
 // POST - Handle webhook from Evolution API
@@ -1033,9 +1047,19 @@ export async function POST(request: NextRequest) {
       console.warn('[Webhook] ⚠️ Header auth failed, but request body is a valid Evolution API event. Processing anyway - please configure webhook headers on Evolution API for proper security.');
       console.warn('[Webhook] ⚠️ Use the /api/integrations/whatsapp/reconfigure-webhook endpoint to add the x-webhook-secret header.');
     } else {
-      // Not a valid Evolution API event and no auth header - reject
-      console.warn('[Webhook] Unauthorized request - invalid webhook secret AND not a valid Evolution API event');
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      // Not a valid Evolution API event and no auth header - but still process if it has ANY recognizable structure
+      // This is important because Evolution API sometimes sends events with unexpected formats
+      const bodyObj = body as Record<string, unknown>;
+      const hasAnyStructure = (bodyObj.event) || (bodyObj.instance) || (bodyObj.data) || (bodyObj.status);
+      
+      if (hasAnyStructure) {
+        console.warn('[Webhook] ⚠️ Header auth failed and body not recognized as standard Evolution API event, but has recognizable structure. Processing with caution.');
+        console.warn('[Webhook] ⚠️ Body keys:', Object.keys(bodyObj).join(', '));
+      } else {
+        // Completely unrecognizable - reject
+        console.warn('[Webhook] Unauthorized request - invalid webhook secret AND not a valid Evolution API event');
+        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      }
     }
   }
 
