@@ -38,9 +38,10 @@ async function getMPConfig() {
     clientId,
     clientSecret,
     redirectUri,
-    // Sandbox vs Production
-    baseUrl: process.env.MP_SANDBOX === 'true' 
-      ? 'https://auth.mercadopago.com.br' 
+    // Mercado Pago OAuth base URL
+    // Use .com for production (global), .com.br for Brazil sandbox
+    baseUrl: process.env.MP_SANDBOX === 'true'
+      ? 'https://auth.mercadopago.com.br'
       : 'https://auth.mercadopago.com',
   };
 }
