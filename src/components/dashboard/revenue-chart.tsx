@@ -28,9 +28,11 @@ export function RevenueChart({ accountId }: RevenueChartProps) {
       try {
         const response = await authFetch(`/api/dashboard/stats?accountId=${accountId}`)
         if (response.ok) {
-          // For now, show empty data since we don't have daily revenue breakdown
-          // In a real app, we'd fetch this from a dedicated endpoint
-          setData([])
+          const result = await response.json()
+          // Use chart data from the API response
+          if (result.chartData?.weeklyRevenue) {
+            setData(result.chartData.weeklyRevenue)
+          }
         }
       } catch (error) {
         console.error('Error fetching revenue data:', error)
@@ -101,8 +103,13 @@ export function RevenueChart({ accountId }: RevenueChartProps) {
                   border: '1px solid hsl(var(--border))',
                   borderRadius: '8px'
                 }}
+                formatter={(value: number, name: string) => {
+                  if (name === 'receita') return [`R$ ${value.toFixed(2)}`, 'Receita']
+                  return [value, 'Agendamentos']
+                }}
               />
               <Bar dataKey="receita" fill="#10B981" radius={[4, 4, 0, 0]} name="Receita (R$)" />
+              <Bar dataKey="agendamentos" fill="#6B7280" radius={[4, 4, 0, 0]} name="Agendamentos" />
             </BarChart>
           </ResponsiveContainer>
         </div>
@@ -125,8 +132,11 @@ export function NoShowTrendChart({ accountId }: RevenueChartProps) {
       try {
         const response = await authFetch(`/api/dashboard/stats?accountId=${accountId}`)
         if (response.ok) {
-          // For now, show empty data
-          setData([])
+          const result = await response.json()
+          // Use no-show trend chart data from the API response
+          if (result.chartData?.noShowTrend) {
+            setData(result.chartData.noShowTrend)
+          }
         }
       } catch (error) {
         console.error('Error fetching no-show trend:', error)
@@ -226,19 +236,26 @@ export function ServiceDistributionChart({ accountId }: RevenueChartProps) {
       }
 
       try {
-        const response = await authFetch(`/api/services?accountId=${accountId}`)
+        // Use the stats endpoint which now includes service distribution from actual appointments
+        const response = await authFetch(`/api/dashboard/stats?accountId=${accountId}`)
         if (response.ok) {
           const result = await response.json()
-          const services = result.services || []
-          
-          // Create distribution from real services
-          const distribution = services.slice(0, 7).map((service: any, index: number) => ({
-            name: service.name,
-            value: service._count?.appointments || 0,
-            color: COLORS[index % COLORS.length]
-          }))
-          
-          setData(distribution)
+          if (result.chartData?.serviceDistribution && result.chartData.serviceDistribution.length > 0) {
+            setData(result.chartData.serviceDistribution)
+          } else {
+            // Fallback: fetch from services endpoint for services without appointments yet
+            const servicesResponse = await authFetch(`/api/services?accountId=${accountId}`)
+            if (servicesResponse.ok) {
+              const servicesResult = await servicesResponse.json()
+              const services = servicesResult.services || []
+              const distribution = services.slice(0, 7).map((service: any, index: number) => ({
+                name: service.name,
+                value: service._count?.appointments || 0,
+                color: COLORS[index % COLORS.length]
+              }))
+              setData(distribution)
+            }
+          }
         }
       } catch (error) {
         console.error('Error fetching service distribution:', error)

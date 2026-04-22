@@ -60,7 +60,8 @@ async function createPixPayment(
   description: string,
   externalReference: string,
   clientEmail?: string,
-  clientName?: string
+  clientName?: string,
+  clientCpf?: string
 ): Promise<{
   qrCode?: string;
   deepLink?: string;
@@ -93,6 +94,25 @@ async function createPixPayment(
     const apiBaseUrl = 'https://api.mercadopago.com'
     const expirationDate = new Date(Date.now() + 3600000).toISOString() // 1 hour
 
+    // Build payer object with CPF if available
+    const payer: Record<string, unknown> = {
+      email: clientEmail || 'cliente@agendazap.com',
+      first_name: clientName?.split(' ')[0] || 'Cliente',
+      last_name: clientName?.split(' ').slice(1).join(' ') || '',
+    }
+
+    // Add CPF identification if available (important for PIX payments)
+    if (clientCpf) {
+      const cleanCpf = clientCpf.replace(/\D/g, '')
+      if (cleanCpf.length === 11) {
+        payer.identification = {
+          type: 'CPF',
+          number: cleanCpf
+        }
+        console.log(`[PIX] Including CPF in payment for ${clientName || 'client'}`)
+      }
+    }
+
     const response = await fetch(`${apiBaseUrl}/v1/payments`, {
       method: 'POST',
       headers: {
@@ -105,11 +125,7 @@ async function createPixPayment(
         payment_method_id: 'pix',
         external_reference: externalReference,
         date_of_expiration: expirationDate,
-        payer: {
-          email: clientEmail || 'cliente@agendazap.com',
-          first_name: clientName?.split(' ')[0] || 'Cliente',
-          last_name: clientName?.split(' ').slice(1).join(' ') || '',
-        },
+        payer,
       }),
     })
 
@@ -145,6 +161,7 @@ export async function GET(request: NextRequest) {
     const date = searchParams.get('date')
     const status = searchParams.get('status')
     const professionalId = searchParams.get('professionalId')
+    const clientId = searchParams.get('clientId')
 
     if (!accountId) {
       return NextResponse.json({ error: 'accountId required' }, { status: 400 })
@@ -152,7 +169,7 @@ export async function GET(request: NextRequest) {
 
     // If authenticated via user auth (not internal), verify account access
     if (authUser) {
-      if (authUser.role !== 'superadmin' && authUser.accountId !== accountId) {
+      if (authUser.role !== 'superadmin' && authUser.role !== 'client' && authUser.accountId !== accountId) {
         return NextResponse.json({ error: 'Forbidden - no access to this account' }, { status: 403 })
       }
     }
@@ -180,6 +197,11 @@ export async function GET(request: NextRequest) {
       where.professionalId = professionalId
     }
 
+    // If clientId filter is provided (used by client portal)
+    if (clientId) {
+      where.clientId = clientId
+    }
+
     const appointments = await db.appointment.findMany({
       where,
       orderBy: { datetime: 'asc' },
@@ -188,6 +210,9 @@ export async function GET(request: NextRequest) {
         Service: true,
         Professional: true,
         NoShowFee: true,
+        Account: {
+          select: { businessName: true, address: true, whatsappNumber: true }
+        },
       }
     })
 
@@ -303,6 +328,7 @@ export async function POST(request: NextRequest) {
         datetime: startTime,
         endTime,
         notes,
+        price: effectivePrice,
         status: 'pending',
       },
       include: {
@@ -320,7 +346,8 @@ export async function POST(request: NextRequest) {
         `${service.name} - ${appointment.id}`,
         appointment.id,
         client.email || undefined,
-        client.name
+        client.name,
+        client.cpf || undefined
       )
 
       if (pixResult) {

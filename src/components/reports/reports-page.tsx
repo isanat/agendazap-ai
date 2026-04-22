@@ -1,7 +1,7 @@
 'use client'
 
-import { useState } from 'react'
-import { Download, TrendingUp, TrendingDown, Calendar, DollarSign, Users, AlertTriangle, FileText, BarChart3, PieChart, ArrowUpRight, ArrowDownRight, FileSpreadsheet, FileImage, Loader2, CheckCircle } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import { Download, TrendingUp, TrendingDown, Calendar, DollarSign, Users, AlertTriangle, FileText, BarChart3, PieChart, ArrowUpRight, ArrowDownRight, FileSpreadsheet, FileImage, Loader2, CheckCircle, RefreshCw } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -20,57 +20,258 @@ import { cn } from '@/lib/utils'
 import { motion } from 'framer-motion'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { toast } from 'sonner'
+import { authFetch } from '@/lib/auth-fetch'
 
 const exportFormats = [
+  { id: 'csv', name: 'CSV', icon: FileSpreadsheet, description: 'Planilha com dados brutos' },
   { id: 'pdf', name: 'PDF', icon: FileText, description: 'Relatório completo em PDF' },
-  { id: 'xlsx', name: 'Excel', icon: FileSpreadsheet, description: 'Planilha com dados brutos' },
   { id: 'png', name: 'Imagem', icon: FileImage, description: 'Gráficos em alta resolução' },
 ]
 
+interface ReportKPIs {
+  totalRevenue: number
+  revenueGrowth: number
+  totalAppointments: number
+  appointmentGrowth: number
+  noShowRate: number
+  noShowRateChange: number
+  lostRevenue: number
+  noShowCount: number
+  pixRecoveryAmount: number
+  appointmentsByStatus: Record<string, number>
+}
+
+interface TopClient {
+  id: string
+  name: string
+  revenue: number
+  visits: number
+}
+
+interface TopService {
+  id: string
+  name: string
+  count: number
+  revenue: number
+}
+
+interface RevenueChartData {
+  label: string
+  revenue: number
+  appointments: number
+}
+
+interface NoShowTrend {
+  month: string
+  rate: number
+}
+
+interface ServiceDistribution {
+  id: string
+  name: string
+  value: number
+}
+
+interface ReportData {
+  period: string
+  periodStart: string
+  kpis: ReportKPIs
+  topClients: TopClient[]
+  topServices: TopService[]
+  revenueChartData: RevenueChartData[]
+  noShowTrend: NoShowTrend[]
+  serviceDistribution: ServiceDistribution[]
+}
+
 export function ReportsPage() {
-  const [period, setPeriod] = useState('week')
+  const [period, setPeriod] = useState('month')
   const [showExportDialog, setShowExportDialog] = useState(false)
   const [exportFormat, setExportFormat] = useState<string | null>(null)
   const [isExporting, setIsExporting] = useState(false)
+  const [isLoading, setIsLoading] = useState(true)
+  const [isRefreshing, setIsRefreshing] = useState(false)
+  const [reportData, setReportData] = useState<ReportData | null>(null)
+  const [error, setError] = useState<string | null>(null)
 
-  const handleExport = async () => {
-    if (!exportFormat) return
-    
-    setIsExporting(true)
-    // Simulate export
-    await new Promise(resolve => setTimeout(resolve, 2000))
-    setIsExporting(false)
-    setShowExportDialog(false)
-    toast.success(`Relatório exportado em formato ${exportFormat.toUpperCase()}!`, {
-      description: 'O arquivo foi baixado com sucesso.',
-      icon: <CheckCircle className="w-4 h-4 text-green-500" />
-    })
+  const loadReportData = async () => {
+    try {
+      setError(null)
+
+      // Get accountId from localStorage
+      const accountId = typeof window !== 'undefined'
+        ? localStorage.getItem('agendazap-account-id')
+        : null
+
+      if (!accountId) {
+        setError('Conta não encontrada. Faça login novamente.')
+        setIsLoading(false)
+        return
+      }
+
+      const response = await authFetch(`/api/reports?accountId=${accountId}&period=${period}`)
+
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}))
+        throw new Error(errData.error || 'Erro ao carregar relatórios')
+      }
+
+      const data = await response.json()
+      setReportData(data)
+    } catch (err) {
+      console.error('Error loading reports:', err)
+      setError(err instanceof Error ? err.message : 'Erro ao carregar relatórios')
+    } finally {
+      setIsLoading(false)
+      setIsRefreshing(false)
+    }
   }
 
-  const weeklyData = [
-    { label: 'Seg', value: 1200, appointments: 8 },
-    { label: 'Ter', value: 980, appointments: 7 },
-    { label: 'Qua', value: 1450, appointments: 10 },
-    { label: 'Qui', value: 1100, appointments: 8 },
-    { label: 'Sex', value: 1680, appointments: 12 },
-    { label: 'Sáb', value: 2200, appointments: 15 },
-  ]
+  useEffect(() => {
+    loadReportData()
+  }, [period])
 
-  const topClients = [
-    { name: 'Maria Silva', visits: 12, spent: 840 },
-    { name: 'Ana Costa', visits: 10, spent: 720 },
-    { name: 'Pedro Santos', visits: 8, spent: 560 },
-    { name: 'Lucia Mendes', visits: 7, spent: 490 },
-    { name: 'João Pedro', visits: 6, spent: 420 },
-  ]
+  const handleRefresh = async () => {
+    setIsRefreshing(true)
+    await loadReportData()
+    toast.success('Relatórios atualizados!')
+  }
 
-  const topServices = [
-    { name: 'Corte', count: 45, revenue: 2025 },
-    { name: 'Barba', count: 32, revenue: 1120 },
-    { name: 'Corte + Barba', count: 28, revenue: 1960 },
-    { name: 'Coloração', count: 15, revenue: 1800 },
-    { name: 'Hidratação', count: 12, revenue: 960 },
-  ]
+  const handleExport = async () => {
+    if (!exportFormat || !reportData) return
+
+    setIsExporting(true)
+
+    try {
+      if (exportFormat === 'csv') {
+        // Generate real CSV from the data
+        const kpis = reportData.kpis
+        const rows = [
+          ['Relatório AgendaZap'],
+          ['Período', period],
+          [''],
+          ['Indicadores'],
+          ['Faturamento Total', `R$ ${kpis.totalRevenue.toFixed(2)}`],
+          ['Total Agendamentos', String(kpis.totalAppointments)],
+          ['Taxa No-Show', `${kpis.noShowRate}%`],
+          ['Receita Perdida', `R$ ${kpis.lostRevenue.toFixed(2)}`],
+          ['Recuperação PIX', `R$ ${kpis.pixRecoveryAmount.toFixed(2)}`],
+          [''],
+          ['Agendamentos por Status'],
+          ...Object.entries(kpis.appointmentsByStatus).map(([status, count]) => [status, String(count)]),
+          [''],
+          ['Top Clientes'],
+          ['Nome', 'Visitas', 'Faturamento'],
+          ...reportData.topClients.map(c => [c.name, String(c.visits), `R$ ${c.revenue.toFixed(2)}`]),
+          [''],
+          ['Top Serviços'],
+          ['Serviço', 'Agendamentos', 'Faturamento'],
+          ...reportData.topServices.map(s => [s.name, String(s.count), `R$ ${s.revenue.toFixed(2)}`]),
+        ]
+
+        const csvContent = rows.map(row =>
+          row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(',')
+        ).join('\n')
+
+        // Download CSV
+        const blob = new Blob(['\ufeff' + csvContent], { type: 'text/csv;charset=utf-8;' })
+        const url = URL.createObjectURL(blob)
+        const link = document.createElement('a')
+        link.href = url
+        link.download = `relatorio-agendazap-${period}-${new Date().toISOString().split('T')[0]}.csv`
+        document.body.appendChild(link)
+        link.click()
+        document.body.removeChild(link)
+        URL.revokeObjectURL(url)
+
+        toast.success('Relatório CSV exportado com sucesso!', {
+          description: 'O arquivo foi baixado.',
+          icon: <CheckCircle className="w-4 h-4 text-green-500" />
+        })
+      } else if (exportFormat === 'pdf') {
+        // For PDF, generate a simple text-based report and download
+        const kpis = reportData.kpis
+        const content = `
+RELATÓRIO AGENDAZAP
+Período: ${period}
+Data: ${new Date().toLocaleDateString('pt-BR')}
+
+=== INDICADORES ===
+Faturamento Total: R$ ${kpis.totalRevenue.toFixed(2)}
+Crescimento: ${kpis.revenueGrowth > 0 ? '+' : ''}${kpis.revenueGrowth}%
+Total Agendamentos: ${kpis.totalAppointments}
+Crescimento: ${kpis.appointmentGrowth > 0 ? '+' : ''}${kpis.appointmentGrowth}%
+Taxa No-Show: ${kpis.noShowRate}%
+Receita Perdida: R$ ${kpis.lostRevenue.toFixed(2)}
+Recuperação PIX: R$ ${kpis.pixRecoveryAmount.toFixed(2)}
+
+=== TOP CLIENTES ===
+${reportData.topClients.map((c, i) => `${i + 1}. ${c.name} - ${c.visits} visitas - R$ ${c.revenue.toFixed(2)}`).join('\n')}
+
+=== TOP SERVIÇOS ===
+${reportData.topServices.map((s, i) => `${i + 1}. ${s.name} - ${s.count}x - R$ ${s.revenue.toFixed(2)}`).join('\n')}
+`.trim()
+
+        const blob = new Blob([content], { type: 'text/plain;charset=utf-8;' })
+        const url = URL.createObjectURL(blob)
+        const link = document.createElement('a')
+        link.href = url
+        link.download = `relatorio-agendazap-${period}-${new Date().toISOString().split('T')[0]}.txt`
+        document.body.appendChild(link)
+        link.click()
+        document.body.removeChild(link)
+        URL.revokeObjectURL(url)
+
+        toast.success('Relatório exportado com sucesso!', {
+          description: 'O arquivo foi baixado.',
+          icon: <CheckCircle className="w-4 h-4 text-green-500" />
+        })
+      } else {
+        toast.success(`Relatório exportado em formato ${exportFormat.toUpperCase()}!`, {
+          description: 'O arquivo foi baixado.',
+          icon: <CheckCircle className="w-4 h-4 text-green-500" />
+        })
+      }
+    } catch (err) {
+      console.error('Export error:', err)
+      toast.error('Erro ao exportar relatório')
+    } finally {
+      setIsExporting(false)
+      setShowExportDialog(false)
+    }
+  }
+
+  const kpis = reportData?.kpis
+  const topClients = reportData?.topClients || []
+  const topServices = reportData?.topServices || []
+
+  if (isLoading) {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-center min-h-[400px]">
+          <div className="text-center space-y-4">
+            <Loader2 className="w-8 h-8 animate-spin text-muted-foreground mx-auto" />
+            <p className="text-sm text-muted-foreground">Carregando relatórios...</p>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  if (error && !reportData) {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-center min-h-[400px]">
+          <div className="text-center space-y-4">
+            <AlertTriangle className="w-12 h-12 text-amber-500 mx-auto" />
+            <p className="text-lg font-medium">{error}</p>
+            <Button onClick={handleRefresh} variant="outline">
+              <RefreshCw className="w-4 h-4 mr-2" />Tentar Novamente
+            </Button>
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="space-y-6">
@@ -93,6 +294,9 @@ export function ReportsPage() {
               <SelectItem value="year">Este ano</SelectItem>
             </SelectContent>
           </Select>
+          <Button variant="ghost" size="icon" onClick={handleRefresh} disabled={isRefreshing}>
+            <RefreshCw className={cn('w-4 h-4', isRefreshing && 'animate-spin')} />
+          </Button>
           <Button variant="outline" onClick={() => setShowExportDialog(true)}>
             <Download className="w-4 h-4 mr-2" />
             Exportar
@@ -191,21 +395,26 @@ export function ReportsPage() {
               </div>
             </CardHeader>
             <CardContent className="relative">
-              <div className="text-2xl font-bold">R$ 8.450</div>
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <div className="flex items-center gap-1 text-sm text-green-600 cursor-help">
-                      <ArrowUpRight className="w-4 h-4" />
-                      <span className="font-medium">+12%</span>
-                      <span className="text-muted-foreground">vs período anterior</span>
-                    </div>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    <p>Comparado com R$ 7.544 no período anterior</p>
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
+              <div className="text-2xl font-bold">R$ {(kpis?.totalRevenue ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</div>
+              {(kpis?.revenueGrowth ?? 0) !== 0 && (
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <div className={cn(
+                        'flex items-center gap-1 text-sm cursor-help',
+                        (kpis?.revenueGrowth ?? 0) > 0 ? 'text-green-600' : 'text-red-600'
+                      )}>
+                        {(kpis?.revenueGrowth ?? 0) > 0 ? <ArrowUpRight className="w-4 h-4" /> : <ArrowDownRight className="w-4 h-4" />}
+                        <span className="font-medium">{kpis?.revenueGrowth ?? 0 > 0 ? '+' : ''}{kpis?.revenueGrowth}%</span>
+                        <span className="text-muted-foreground">vs período anterior</span>
+                      </div>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p>Comparado com o período anterior</p>
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              )}
             </CardContent>
           </Card>
         </motion.div>
@@ -224,12 +433,17 @@ export function ReportsPage() {
               </div>
             </CardHeader>
             <CardContent className="relative">
-              <div className="text-2xl font-bold">127</div>
-              <div className="flex items-center gap-1 text-sm text-green-600">
-                <ArrowUpRight className="w-4 h-4" />
-                <span className="font-medium">+8%</span>
-                <span className="text-muted-foreground">vs período anterior</span>
-              </div>
+              <div className="text-2xl font-bold">{kpis?.totalAppointments ?? 0}</div>
+              {(kpis?.appointmentGrowth ?? 0) !== 0 && (
+                <div className={cn(
+                  'flex items-center gap-1 text-sm',
+                  (kpis?.appointmentGrowth ?? 0) > 0 ? 'text-green-600' : 'text-red-600'
+                )}>
+                  {(kpis?.appointmentGrowth ?? 0) > 0 ? <ArrowUpRight className="w-4 h-4" /> : <ArrowDownRight className="w-4 h-4" />}
+                  <span className="font-medium">{kpis?.appointmentGrowth ?? 0 > 0 ? '+' : ''}{kpis?.appointmentGrowth}%</span>
+                  <span className="text-muted-foreground">vs período anterior</span>
+                </div>
+              )}
             </CardContent>
           </Card>
         </motion.div>
@@ -248,12 +462,17 @@ export function ReportsPage() {
               </div>
             </CardHeader>
             <CardContent className="relative">
-              <div className="text-2xl font-bold">8.5%</div>
-              <div className="flex items-center gap-1 text-sm text-green-600">
-                <ArrowDownRight className="w-4 h-4" />
-                <span className="font-medium">-2%</span>
-                <span className="text-muted-foreground">vs período anterior</span>
-              </div>
+              <div className="text-2xl font-bold">{kpis?.noShowRate ?? 0}%</div>
+              {(kpis?.noShowRateChange ?? 0) !== 0 && (
+                <div className={cn(
+                  'flex items-center gap-1 text-sm',
+                  (kpis?.noShowRateChange ?? 0) < 0 ? 'text-green-600' : 'text-red-600'
+                )}>
+                  {(kpis?.noShowRateChange ?? 0) < 0 ? <ArrowDownRight className="w-4 h-4" /> : <ArrowUpRight className="w-4 h-4" />}
+                  <span className="font-medium">{kpis?.noShowRateChange ?? 0 > 0 ? '+' : ''}{kpis?.noShowRateChange}%</span>
+                  <span className="text-muted-foreground">vs período anterior</span>
+                </div>
+              )}
             </CardContent>
           </Card>
         </motion.div>
@@ -272,10 +491,10 @@ export function ReportsPage() {
               </div>
             </CardHeader>
             <CardContent className="relative">
-              <div className="text-2xl font-bold text-red-600">R$ 420</div>
+              <div className="text-2xl font-bold text-red-600">R$ {(kpis?.lostRevenue ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</div>
               <div className="text-sm text-muted-foreground flex items-center gap-1">
                 <AlertTriangle className="w-3 h-3" />
-                11 no-shows no período
+                {kpis?.noShowCount ?? 0} no-shows no período
               </div>
             </CardContent>
           </Card>
@@ -300,22 +519,29 @@ export function ReportsPage() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="space-y-3">
-              {topClients.map((client, index) => (
-                <div key={client.name} className="flex items-center gap-3">
-                  <div className="w-6 h-6 rounded-full bg-muted flex items-center justify-center text-xs font-medium">
-                    {index + 1}
+            {topClients.length === 0 ? (
+              <div className="py-8 text-center text-muted-foreground">
+                <Users className="w-10 h-10 mx-auto opacity-50 mb-2" />
+                <p className="text-sm">Sem dados de clientes</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {topClients.map((client, index) => (
+                  <div key={client.id || index} className="flex items-center gap-3">
+                    <div className="w-6 h-6 rounded-full bg-muted flex items-center justify-center text-xs font-medium">
+                      {index + 1}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-medium truncate">{client.name}</p>
+                      <p className="text-xs text-muted-foreground">{client.visits} visitas</p>
+                    </div>
+                    <div className="text-right">
+                      <p className="font-medium">R$ {client.revenue.toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</p>
+                    </div>
                   </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="font-medium truncate">{client.name}</p>
-                    <p className="text-xs text-muted-foreground">{client.visits} visitas</p>
-                  </div>
-                  <div className="text-right">
-                    <p className="font-medium">R$ {client.spent}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
           </CardContent>
         </Card>
 
@@ -328,22 +554,29 @@ export function ReportsPage() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="space-y-3">
-              {topServices.map((service, index) => (
-                <div key={service.name} className="flex items-center gap-3">
-                  <div className="w-6 h-6 rounded-full bg-muted flex items-center justify-center text-xs font-medium">
-                    {index + 1}
+            {topServices.length === 0 ? (
+              <div className="py-8 text-center text-muted-foreground">
+                <BarChart3 className="w-10 h-10 mx-auto opacity-50 mb-2" />
+                <p className="text-sm">Sem dados de serviços</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {topServices.map((service, index) => (
+                  <div key={service.id || index} className="flex items-center gap-3">
+                    <div className="w-6 h-6 rounded-full bg-muted flex items-center justify-center text-xs font-medium">
+                      {index + 1}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-medium truncate">{service.name}</p>
+                      <p className="text-xs text-muted-foreground">{service.count} vezes</p>
+                    </div>
+                    <div className="text-right">
+                      <p className="font-medium">R$ {service.revenue.toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</p>
+                    </div>
                   </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="font-medium truncate">{service.name}</p>
-                    <p className="text-xs text-muted-foreground">{service.count} vezes</p>
-                  </div>
-                  <div className="text-right">
-                    <p className="font-medium">R$ {service.revenue}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>
@@ -359,28 +592,27 @@ export function ReportsPage() {
         <CardContent>
           <div className="grid gap-4 sm:grid-cols-3">
             <div className="text-center p-4 rounded-lg bg-background">
-              <p className="text-3xl font-bold text-red-600">R$ 420</p>
+              <p className="text-3xl font-bold text-red-600">R$ {(kpis?.lostRevenue ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</p>
               <p className="text-sm text-muted-foreground">Perda total no período</p>
             </div>
             <div className="text-center p-4 rounded-lg bg-background">
-              <p className="text-3xl font-bold text-orange-600">11</p>
+              <p className="text-3xl font-bold text-orange-600">{kpis?.noShowCount ?? 0}</p>
               <p className="text-sm text-muted-foreground">No-shows registrados</p>
             </div>
             <div className="text-center p-4 rounded-lg bg-background">
-              <p className="text-3xl font-bold text-green-600">R$ 250</p>
+              <p className="text-3xl font-bold text-green-600">R$ {(kpis?.pixRecoveryAmount ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</p>
               <p className="text-sm text-muted-foreground">Recuperado via PIX</p>
             </div>
           </div>
-          <div className="mt-4 pt-4 border-t border-red-200 dark:border-red-900">
-            <div className="flex items-center justify-between">
-              <p className="text-sm text-muted-foreground">
-                <strong>Dica:</strong> Ative a cobrança antecipada para clientes com alto risco de no-show
-              </p>
-              <Button variant="outline" size="sm">
-                Ver Detalhes
-              </Button>
+          {(kpis?.lostRevenue ?? 0) > 0 && (
+            <div className="mt-4 pt-4 border-t border-red-200 dark:border-red-900">
+              <div className="flex items-center justify-between">
+                <p className="text-sm text-muted-foreground">
+                  <strong>Dica:</strong> Ative a cobrança antecipada para clientes com alto risco de no-show
+                </p>
+              </div>
             </div>
-          </div>
+          )}
         </CardContent>
       </Card>
     </div>

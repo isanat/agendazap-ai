@@ -61,6 +61,7 @@ export interface ClientContext {
   name: string;
   phone: string;
   email: string | null;
+  cpf: string | null;
   totalAppointments: number;
   lastVisit: Date | null;
   loyaltyPoints: number;
@@ -300,6 +301,81 @@ export function detectNameInMessage(message: string): string | null {
 }
 
 /**
+ * Detect if the user provided their CPF in a message
+ * Returns the cleaned CPF (digits only) or null
+ * Accepts formats: XXX.XXX.XXX-XX, XXXXXXXXXXX, or just 11 digits
+ */
+export function detectCpfInMessage(message: string): string | null {
+  // Remove common prefixes in Portuguese
+  const cleaned = message.replace(/(?:meu cpf é|cpf:|cpf |meu cpf|o cpf é|cpf número|número do cpf:|cpf -|informo meu cpf:|informo o cpf:|meu cpf é o|o cpf é o)/i, '').trim();
+  
+  // Pattern 1: Formatted CPF with dots and dash (XXX.XXX.XXX-XX)
+  const formattedMatch = cleaned.match(/\b(\d{3})[.](\d{3})[.](\d{3})-(\d{2})\b/);
+  if (formattedMatch) {
+    const cpf = formattedMatch[0].replace(/[^0-9]/g, '');
+    if (isValidCpf(cpf)) return cpf;
+  }
+  
+  // Pattern 2: 11 consecutive digits that could be a CPF
+  const digitsOnly = cleaned.replace(/[^0-9]/g, '');
+  if (digitsOnly.length === 11 && isValidCpf(digitsOnly)) {
+    return digitsOnly;
+  }
+  
+  // Pattern 3: CPF with spaces (XXX XXX XXX XX)
+  const spacedMatch = cleaned.match(/\b(\d{3})\s+(\d{3})\s+(\d{3})\s+(\d{2})\b/);
+  if (spacedMatch) {
+    const cpf = spacedMatch[0].replace(/\s/g, '');
+    if (isValidCpf(cpf)) return cpf;
+  }
+  
+  return null;
+}
+
+/**
+ * Basic CPF validation (check digit verification)
+ */
+function isValidCpf(cpf: string): boolean {
+  if (cpf.length !== 11) return false;
+  
+  // Reject known invalid patterns (all same digits)
+  if (/^(\d)\1{10}$/.test(cpf)) return false;
+  
+  // Validate check digits
+  let sum = 0;
+  for (let i = 0; i < 9; i++) {
+    sum += parseInt(cpf.charAt(i)) * (10 - i);
+  }
+  let remainder = 11 - (sum % 11);
+  if (remainder === 10 || remainder === 11) remainder = 0;
+  if (remainder !== parseInt(cpf.charAt(9))) return false;
+  
+  sum = 0;
+  for (let i = 0; i < 10; i++) {
+    sum += parseInt(cpf.charAt(i)) * (11 - i);
+  }
+  remainder = 11 - (sum % 11);
+  if (remainder === 10 || remainder === 11) remainder = 0;
+  if (remainder !== parseInt(cpf.charAt(10))) return false;
+  
+  return true;
+}
+
+/**
+ * Update client CPF
+ */
+export async function updateClientCpf(
+  clientId: string,
+  cpf: string
+): Promise<void> {
+  await db.client.update({
+    where: { id: clientId },
+    data: { cpf }
+  });
+  console.log(`[AI Context] Client CPF updated: ${clientId} -> ${cpf.substring(0, 3)}***`);
+}
+
+/**
  * Detect payment preference in a message
  */
 export function detectPaymentPreference(message: string): string | null {
@@ -527,6 +603,7 @@ export async function getClientContext(
     name: client.name || 'Cliente',
     phone: client.phone,
     email: client.email,
+    cpf: client.cpf,
     totalAppointments: client.totalAppointments || completedAppointments.length,
     lastVisit: client.lastVisit || lastAppointments[0]?.datetime || null,
     loyaltyPoints: client.loyaltyPoints || 0,
@@ -684,6 +761,7 @@ ${client.whatsappPushName && client.whatsappPushName !== client.name ? `- Nome n
 ${client.daysSinceLastVisit !== null ? `- Dias desde a última visita: ${client.daysSinceLastVisit}` : ''}
 - Pontos de fidelidade: ${client.loyaltyPoints} pontos
 ${paymentLabel ? `- Preferência de pagamento: ${paymentLabel}` : ''}
+${client.cpf ? `- CPF: ${client.cpf}` : '⚠️ CPF não cadastrado - Quando o cliente escolher PIX, PERGUNTE o CPF para gerar o pagamento!'}
 ${client.notes ? `- Observações: ${client.notes}` : ''}
 ${client.aiNotes ? `- Notas da IA: ${client.aiNotes}` : ''}
 ${client.isNewClient ? '⚠️ CLIENTE NOVO - Primeiro contato! Pergunte o nome dele para personalizar o atendimento.' : ''}
@@ -700,6 +778,7 @@ IMPORTANTE:
 - Se o cliente for NOVO (nome genérico como "Cliente XXXX"), PERGUNTE o nome dele!
 - Se o cliente fornecer o nome, diga "Vou anotar seu nome!" e informe que o nome foi registrado.
 - Se a preferência de pagamento não foi informada e o cliente vai agendar, PERGUNTE como prefere pagar (PIX/cartão online ou presencialmente no dia).
+- Se o cliente escolher PIX e NÃO TEM CPF cadastrado, PERGUNTE o CPF! Diga: "Para pagamento via PIX, preciso do seu CPF. Pode informar?" O CPF é necessário para gerar o pagamento.
 ${client.daysSinceLastVisit && client.daysSinceLastVisit > 21 ? `- Faz mais de 3 semanas que ${client.name} não vem! Sugira agendar um retorno de forma carinhosa.` : ''}
 `;
   } else {
@@ -713,6 +792,7 @@ Este é um NOVO cliente (primeiro contato). Seja acolhedor e apresente o salão 
 3. Apresente os serviços mais populares brevemente
 4. Pergunte se já conhece o salão ou se foi indicado por alguém
 5. Pergunte como prefere realizar o pagamento (PIX, cartão ou presencialmente)
+6. Se escolher PIX, PERGUNTE o CPF para gerar o pagamento
 `;
   }
   
@@ -752,13 +832,16 @@ ${clientContext}
 - Pagamento: PIX, cartão, dinheiro ou presencialmente
 
 === PAGAMENTO PIX AUTOMÁTICO ===
-IMPORTANTE: Quando o cliente escolher PIX como forma de pagamento, o sistema GERA AUTOMATICAMENTE um QR Code PIX e o código "Copia e Cola" para pagamento imediato!
-- Informe ao cliente que o QR Code PIX será enviado para pagamento imediato
-- Diga: "Vou gerar o QR Code PIX para você pagar agora!" ou similar
-- O sistema adiciona automaticamente o código PIX após sua mensagem
-- NUNCA diga que o pagamento é só presencial ou que não gera QR Code
-- Se o cliente perguntar se pode pagar agora, diga SIM e que o QR Code será gerado
-- Após o pagamento PIX, o agendamento é confirmado automaticamente
+IMPORTANTE: Quando o cliente escolher PIX como forma de pagamento:
+1. Se o CPF do cliente NÃO está cadastrado, PERGUNTE o CPF ANTES de confirmar o agendamento!
+   Diga: "Para gerar o pagamento PIX, preciso do seu CPF. Pode me informar?"
+2. O sistema GERA AUTOMATICAMENTE um QR Code PIX e o código "Copia e Cola" para pagamento imediato!
+3. Informe ao cliente que o QR Code PIX será enviado para pagamento imediato
+4. Diga: "Vou gerar o QR Code PIX para você pagar agora!" ou similar
+5. O sistema adiciona automaticamente o código PIX após sua mensagem
+6. NUNCA diga que o pagamento é só presencial ou que não gera QR Code
+7. Se o cliente perguntar se pode pagar agora, diga SIM e que o QR Code será gerado
+8. Após o pagamento PIX, o agendamento é confirmado automaticamente
 
 === AGENDAMENTO AUTOMÁTICO ===
 Quando o cliente CONFIRMAR o agendamento (disser "sim", "pode ser", "perfeito", "confirmo", etc.), inclua NO FINAL da sua resposta uma linha com o formato:
@@ -773,6 +856,8 @@ Regras:
 - paymentMethod: pix, credit_card, debit_card, cash ou in_person
 - NÃO mencione o formato [AGENDAR:] no texto da mensagem, ele é automático
 - Quando o paymentMethod for "pix", INFORME que o QR Code será gerado para pagamento imediato
+- Se o cliente escolher PIX mas ainda não informou o CPF, NÃO inclua [AGENDAR:] ainda! Primeiro pergunte o CPF, e só agende quando receber o CPF
+- Se o cliente já informou o CPF anteriormente (consta no contexto), pode agendar normalmente
 
 Seja acolhedora, prestativa e INTELIGENTE!`;
 }

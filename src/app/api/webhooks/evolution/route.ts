@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { generateChatCompletion, canAccountUseAI, transcribeAudioBase64, type ChatMessage } from '@/lib/ai-provider-service';
-import { generateSystemPrompt, findOrCreateClient, detectNameInMessage, updateClientName, detectPaymentPreference, updateClientPaymentPreference } from '@/lib/ai-context-service';
+import { generateSystemPrompt, findOrCreateClient, detectNameInMessage, updateClientName, detectPaymentPreference, updateClientPaymentPreference, detectCpfInMessage, updateClientCpf } from '@/lib/ai-context-service';
 import { decryptCredentials } from '@/app/api/integrations/route';
 
 /**
@@ -1237,6 +1237,13 @@ async function processIncomingMessage(
     console.log(`[Webhook] Payment preference detected: ${detectedPayment}`);
   }
 
+  // DETECT CPF: Check if user is providing their CPF (needed for PIX payments)
+  const detectedCpf = detectCpfInMessage(messageText);
+  if (detectedCpf) {
+    await updateClientCpf(clientId, detectedCpf);
+    console.log(`[Webhook] CPF detected and updated: ${detectedCpf.substring(0, 3)}***`);
+  }
+
   // Save message to database
   // Include LID identifier in metadata for future DB-based LID resolution
   const messageMetadata: Record<string, unknown> = {
@@ -1246,6 +1253,7 @@ async function processIncomingMessage(
     audioTranscribed,
     detectedName: detectedName || undefined,
     detectedPayment: detectedPayment || undefined,
+    detectedCpf: detectedCpf || undefined,
     raw: data.message ?? undefined,
   };
   
@@ -1460,7 +1468,20 @@ async function createAppointmentFromBooking(
     
     if (booking.paymentMethod === 'pix' && foundService.price > 0) {
       try {
-        pixData = await generatePixPayment(accountId, appointment.id, foundService.price, foundService.name);
+        // Fetch client CPF and name for Mercado Pago PIX payment
+        const clientInfo = await db.client.findUnique({
+          where: { id: clientId },
+          select: { cpf: true, name: true, email: true }
+        });
+        pixData = await generatePixPayment(
+          accountId,
+          appointment.id,
+          foundService.price,
+          foundService.name,
+          clientInfo?.cpf || null,
+          clientInfo?.name || null,
+          clientInfo?.email || null
+        );
       } catch (pixError) {
         console.error(`[Webhook] Failed to generate PIX payment: ${pixError instanceof Error ? pixError.message : pixError}`);
         // Don't fail the appointment creation - just log the error
@@ -1481,7 +1502,10 @@ async function generatePixPayment(
   accountId: string,
   appointmentId: string,
   amount: number,
-  description: string
+  description: string,
+  clientCpf?: string | null,
+  clientName?: string | null,
+  clientEmail?: string | null
 ): Promise<{ qrCode?: string; qrCodeBase64?: string; ticketUrl?: string; deepLink?: string } | undefined> {
   try {
     // Check if Mercado Pago is connected for this account
@@ -1519,6 +1543,28 @@ async function generatePixPayment(
     const expirationDate = new Date(Date.now() + 3600 * 1000).toISOString(); // 1 hour
     const idempotencyKey = `agendazap_${appointmentId}_${Date.now()}`;
 
+    // Build payer object with CPF if available
+    const payer: Record<string, unknown> = {
+      email: clientEmail || 'cliente@agendazap.com',
+    };
+
+    if (clientName) {
+      payer.first_name = clientName.split(' ')[0] || 'Cliente';
+      payer.last_name = clientName.split(' ').slice(1).join(' ') || '';
+    }
+
+    // Add CPF to payer if available (important for PIX payment generation)
+    if (clientCpf) {
+      const cleanCpf = clientCpf.replace(/\D/g, '');
+      if (cleanCpf.length === 11) {
+        payer.identification = {
+          type: 'CPF',
+          number: cleanCpf
+        };
+        console.log(`[Webhook] Including CPF in PIX payment for ${clientName || 'client'}`);
+      }
+    }
+
     // Create PIX payment via Mercado Pago API
     const response = await fetch('https://api.mercadopago.com/v1/payments', {
       method: 'POST',
@@ -1533,9 +1579,7 @@ async function generatePixPayment(
         payment_method_id: 'pix',
         external_reference: `appointment_${appointmentId}`,
         date_of_expiration: expirationDate,
-        payer: {
-          email: 'cliente@agendazap.com',
-        },
+        payer,
       }),
     });
 

@@ -177,6 +177,96 @@ export async function GET(request: NextRequest) {
       ? Math.round(((monthAppointments - lastMonthAppointments) / lastMonthAppointments) * 100)
       : 0
 
+    // === CHART DATA ===
+
+    // 1. Weekly revenue data (last 7 days)
+    const dayLabels = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb']
+    const weeklyRevenueData: { name: string; receita: number; agendamentos: number }[] = []
+
+    for (let i = 6; i >= 0; i--) {
+      const dayStart = new Date(today)
+      dayStart.setDate(today.getDate() - i)
+      const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000)
+
+      const dayAppointments = await db.appointment.findMany({
+        where: {
+          accountId,
+          status: 'completed',
+          datetime: { gte: dayStart, lt: dayEnd }
+        },
+        include: {
+          Service: { select: { price: true } }
+        }
+      })
+
+      const dayRevenue = dayAppointments.reduce((sum, apt) => sum + (apt.Service?.price || 0), 0)
+      const dayCount = await db.appointment.count({
+        where: {
+          accountId,
+          datetime: { gte: dayStart, lt: dayEnd }
+        }
+      })
+
+      weeklyRevenueData.push({
+        name: dayLabels[dayStart.getDay()],
+        receita: dayRevenue,
+        agendamentos: dayCount
+      })
+    }
+
+    // 2. Service distribution data (from appointments, not just service list)
+    const serviceDistributionRaw = await db.appointment.groupBy({
+      by: ['serviceId'],
+      where: { accountId },
+      _count: { serviceId: true },
+      orderBy: { _count: { serviceId: 'desc' } },
+      take: 7
+    })
+
+    // Fetch service names for the grouped data
+    const serviceIds = serviceDistributionRaw.map(s => s.serviceId)
+    const servicesInfo = await db.service.findMany({
+      where: { id: { in: serviceIds } },
+      select: { id: true, name: true }
+    })
+    const serviceNameMap = new Map(servicesInfo.map(s => [s.id, s.name]))
+
+    const COLORS = ['#10B981', '#3B82F6', '#8B5CF6', '#F59E0B', '#6B7280', '#EC4899', '#14B8A6']
+    const serviceDistributionData = serviceDistributionRaw.map((item, index) => ({
+      name: serviceNameMap.get(item.serviceId) || 'Serviço',
+      value: item._count.serviceId,
+      color: COLORS[index % COLORS.length]
+    }))
+
+    // 3. No-show trend data (last 6 months)
+    const noShowTrendData: { month: string; rate: number }[] = []
+    for (let i = 5; i >= 0; i--) {
+      const monthStart = new Date(now.getFullYear(), now.getMonth() - i, 1)
+      const monthEnd = new Date(now.getFullYear(), now.getMonth() - i + 1, 0)
+
+      const monthNoShows = await db.appointment.count({
+        where: {
+          accountId,
+          status: 'no_show',
+          datetime: { gte: monthStart, lt: new Date(monthEnd.getTime() + 24 * 60 * 60 * 1000) }
+        }
+      })
+      const monthCompleted = await db.appointment.count({
+        where: {
+          accountId,
+          status: 'completed',
+          datetime: { gte: monthStart, lt: new Date(monthEnd.getTime() + 24 * 60 * 60 * 1000) }
+        }
+      })
+      const total = monthNoShows + monthCompleted
+      const rate = total > 0 ? Math.round((monthNoShows / total) * 100) : 0
+
+      noShowTrendData.push({
+        month: monthStart.toLocaleDateString('pt-BR', { month: 'short' }).replace('.', ''),
+        rate
+      })
+    }
+
     return NextResponse.json({
       stats: {
         todayAppointments,
@@ -214,7 +304,12 @@ export async function GET(request: NextRequest) {
         name: client.name,
         phone: client.phone,
         noShowScore: client.noShowScore
-      }))
+      })),
+      chartData: {
+        weeklyRevenue: weeklyRevenueData,
+        serviceDistribution: serviceDistributionData,
+        noShowTrend: noShowTrendData
+      }
     })
   } catch (error) {
     console.error('Error fetching dashboard stats:', error)

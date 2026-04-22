@@ -153,6 +153,7 @@ model Client {
   name              String
   phone             String
   email             String?
+  cpf               String?
   totalAppointments Int                  @default(0)
   noShowCount       Int                  @default(0)
   lastVisit         DateTime?
