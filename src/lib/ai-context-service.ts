@@ -751,6 +751,19 @@ ${clientContext}
 - Se faz 2+ semanas sem vir, sugira retorno. Se cancelou, pergunte remarcar
 - Pagamento: PIX, cartão, dinheiro ou presencialmente
 
+=== AGENDAMENTO AUTOMÁTICO ===
+Quando o cliente CONFIRMAR o agendamento (disser "sim", "pode ser", "perfeito", "confirmo", etc.), inclua NO FINAL da sua resposta uma linha com o formato:
+[AGENDAR:serviceName:professionalName:YYYY-MM-DD:HH:mm:paymentMethod]
+Exemplo: [AGENDAR:Corte Masculino:Roberto:2026-04-23:13:30:pix]
+
+Regras:
+- Só inclua [AGENDAR:...] quando tiver TODOS os dados confirmados
+- serviceName deve ser EXATAMENTE como consta na lista de serviços
+- professionalName deve ser EXATAMENTE como consta na lista de profissionais
+- Data no formato YYYY-MM-DD, hora no formato HH:mm (24h)
+- paymentMethod: pix, credit_card, debit_card, cash ou in_person
+- NÃO mencione o formato [AGENDAR:] no texto da mensagem, ele é automático
+
 Seja acolhedora, prestativa e INTELIGENTE!`;
 }
 

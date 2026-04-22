@@ -15,12 +15,15 @@ export async function GET(request: NextRequest) {
     // Determine Evolution API availability
     const evolutionApiAvailable = hasEnvEvolutionConfig || !!(config?.evolutionApiUrl && config?.evolutionApiKey);
     
+    // Determine Mercado Pago availability - needs env vars configured
+    const hasMercadoPagoEnv = !!(process.env.MP_CLIENT_ID && process.env.MP_CLIENT_SECRET && process.env.MP_REDIRECT_URI);
+    
     // Return appropriate config with defaults
     const responseConfig = {
       evolutionApiUrl: hasEnvEvolutionConfig ? envEvolutionApiUrl : config?.evolutionApiUrl || null,
       evolutionApiAvailable,
       enableAiAssistant: config?.enableAiAssistant ?? true,
-      enableMercadoPago: config?.enableMercadoPago ?? true,
+      enableMercadoPago: (config?.enableMercadoPago ?? true) && hasMercadoPagoEnv,
     };
 
     return NextResponse.json({ config: responseConfig });

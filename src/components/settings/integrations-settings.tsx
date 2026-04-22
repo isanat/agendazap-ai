@@ -213,6 +213,19 @@ export function IntegrationsSettings() {
 
       if (data.authUrl) {
         window.location.href = data.authUrl;
+      } else if (data.setupRequired) {
+        toast({
+          title: 'Configuração necessária',
+          description: 'O administrador do sistema precisa configurar as credenciais do Mercado Pago (MP_CLIENT_ID, MP_CLIENT_SECRET, MP_REDIRECT_URI) nas variáveis de ambiente do Vercel.',
+          variant: 'destructive',
+          duration: 8000,
+        });
+      } else {
+        toast({
+          title: 'Erro',
+          description: data.error || 'Não foi possível iniciar a conexão com Mercado Pago',
+          variant: 'destructive',
+        });
       }
     } catch {
       toast({
@@ -455,9 +468,12 @@ export function IntegrationsSettings() {
         </CardHeader>
         <CardContent>
           {!systemConfig?.enableMercadoPago ? (
-            <div className="p-4 bg-muted rounded-lg">
-              <p className="text-sm text-muted-foreground">
-                Esta funcionalidade está desabilitada pelo administrador.
+            <div className="p-4 bg-amber-50 dark:bg-amber-950/20 rounded-lg border border-amber-200 dark:border-amber-800">
+              <p className="text-sm text-amber-800 dark:text-amber-200">
+                O Mercado Pago precisa ser configurado pelo administrador do sistema. 
+                Variáveis necessárias no Vercel: <code className="px-1 bg-amber-100 dark:bg-amber-900 rounded">MP_CLIENT_ID</code>,{' '}
+                <code className="px-1 bg-amber-100 dark:bg-amber-900 rounded">MP_CLIENT_SECRET</code> e{' '}
+                <code className="px-1 bg-amber-100 dark:bg-amber-900 rounded">MP_REDIRECT_URI</code>.
               </p>
             </div>
           ) : mercadopagoIntegration?.status === 'connected' ? (

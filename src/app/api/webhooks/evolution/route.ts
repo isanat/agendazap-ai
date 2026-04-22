@@ -510,15 +510,26 @@ async function processIncomingMessage(
   }
 
   // CHECK FOR DUPLICATES using ProcessedMessage table
+  // Use optimistic locking: create the processed message record FIRST, then process
+  // This prevents race conditions where two concurrent requests both pass the findUnique check
   const messageId = data.key?.id;
   if (messageId) {
-    const existingProcessed = await db.processedMessage.findUnique({
-      where: { messageId }
-    });
-    
-    if (existingProcessed) {
-      console.log(`[Webhook] Skipping duplicate message: ${messageId}`);
-      return;
+    try {
+      await db.processedMessage.create({
+        data: {
+          messageId,
+          accountId: '', // Will be updated after we find the account
+          expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+        }
+      });
+    } catch (err: any) {
+      // Unique constraint violation = duplicate message
+      if (err?.code === 'P2002' || String(err).includes('Unique')) {
+        console.log(`[Webhook] Skipping duplicate message: ${messageId}`);
+        return;
+      }
+      // Other errors: log but continue (don't block processing)
+      console.warn(`[Webhook] Could not record processed message: ${err?.message || err}`);
     }
   }
 
@@ -698,25 +709,171 @@ async function processIncomingMessage(
     data: { lastAiInteraction: new Date() }
   });
 
-  // Record processed message for deduplication (7-day TTL)
+  // Update the processed message record with the correct accountId
   if (messageId) {
-    await db.processedMessage.create({
-      data: {
-        messageId,
-        accountId,
-        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days TTL
-      }
-    }).catch(err => {
-      // Ignore unique constraint violations (race condition)
-      if (!String(err).includes('Unique')) {
-        console.error('[Webhook] Error recording processed message:', err);
-      }
-    });
+    await db.processedMessage.updateMany({
+      where: { messageId },
+      data: { accountId }
+    }).catch(() => {}); // Don't fail if update fails
   }
 
   // Process message with AI
   // Pass the original JID so we can send directly to it if phone number resolution fails
   await processMessageWithAI(accountId, phone, messageText, clientId, instanceName, data.key?.remoteJid);
+}
+
+/**
+ * Parse [AGENDAR:serviceName:professionalName:YYYY-MM-DD:HH:mm:paymentMethod] from AI response
+ * Returns the booking data and the cleaned response text (without the marker)
+ */
+function parseBookingCommand(aiResponse: string): {
+  cleanedResponse: string;
+  booking: {
+    serviceName: string;
+    professionalName: string;
+    date: string;
+    time: string;
+    paymentMethod: string;
+  } | null;
+} {
+  const bookingRegex = /\[AGENDAR:([^:]+):([^:]+):(\d{4}-\d{2}-\d{2}):(\d{2}:\d{2}):([^\]]+)\]/;
+  const match = aiResponse.match(bookingRegex);
+  
+  if (!match) {
+    return { cleanedResponse: aiResponse, booking: null };
+  }
+  
+  const booking = {
+    serviceName: match[1].trim(),
+    professionalName: match[2].trim(),
+    date: match[3].trim(),
+    time: match[4].trim(),
+    paymentMethod: match[5].trim(),
+  };
+  
+  // Remove the booking marker from the response text
+  const cleanedResponse = aiResponse.replace(bookingRegex, '').trim();
+  
+  return { cleanedResponse, booking };
+}
+
+/**
+ * Create an appointment from a parsed booking command
+ */
+async function createAppointmentFromBooking(
+  accountId: string,
+  clientId: string,
+  booking: {
+    serviceName: string;
+    professionalName: string;
+    date: string;
+    time: string;
+    paymentMethod: string;
+  }
+): Promise<{ success: boolean; appointmentId?: string; error?: string }> {
+  try {
+    // Find the service by name
+    const service = await db.service.findFirst({
+      where: { accountId, name: { equals: booking.serviceName, mode: 'insensitive' } }
+    });
+    
+    if (!service) {
+      // Try partial match
+      const partialService = await db.service.findFirst({
+        where: { accountId, name: { contains: booking.serviceName, mode: 'insensitive' }, isActive: true }
+      });
+      if (!partialService) {
+        console.error(`[Webhook] Service not found: ${booking.serviceName}`);
+        return { success: false, error: `Service not found: ${booking.serviceName}` };
+      }
+    }
+    
+    const foundService = service || (await db.service.findFirst({
+      where: { accountId, name: { contains: booking.serviceName, mode: 'insensitive' }, isActive: true }
+    }))!;
+    
+    // Find the professional by name
+    const professional = await db.professional.findFirst({
+      where: { accountId, name: { equals: booking.professionalName, mode: 'insensitive' }, isActive: true }
+    });
+    
+    if (!professional) {
+      // Try partial match
+      const partialProf = await db.professional.findFirst({
+        where: { accountId, name: { contains: booking.professionalName, mode: 'insensitive' }, isActive: true }
+      });
+      if (!partialProf) {
+        console.error(`[Webhook] Professional not found: ${booking.professionalName}`);
+        return { success: false, error: `Professional not found: ${booking.professionalName}` };
+      }
+    }
+    
+    const foundProfessional = professional || (await db.professional.findFirst({
+      where: { accountId, name: { contains: booking.professionalName, mode: 'insensitive' }, isActive: true }
+    }))!;
+    
+    // Parse date and time
+    const datetime = new Date(`${booking.date}T${booking.time}:00`);
+    if (isNaN(datetime.getTime())) {
+      console.error(`[Webhook] Invalid datetime: ${booking.date}T${booking.time}`);
+      return { success: false, error: `Invalid datetime: ${booking.date}T${booking.time}` };
+    }
+    
+    // Calculate end time based on service duration
+    const endTime = new Date(datetime.getTime() + foundService.durationMinutes * 60000);
+    
+    // Check for conflicting appointments
+    const conflicts = await db.appointment.findMany({
+      where: {
+        accountId,
+        professionalId: foundProfessional.id,
+        status: { in: ['pending', 'confirmed', 'scheduled'] },
+        datetime: { lt: endTime },
+        endTime: { gt: datetime },
+      }
+    });
+    
+    if (conflicts.length > 0) {
+      console.log(`[Webhook] Time slot conflict for ${booking.date} at ${booking.time}`);
+      return { success: false, error: 'Time slot already booked' };
+    }
+    
+    // Create the appointment
+    const appointment = await db.appointment.create({
+      data: {
+        accountId,
+        clientId,
+        serviceId: foundService.id,
+        professionalId: foundProfessional.id,
+        datetime,
+        endTime,
+        status: 'pending',
+        notes: `Agendado via WhatsApp IA. Pagamento: ${booking.paymentMethod}`,
+      },
+      include: { Service: true, Professional: true }
+    });
+    
+    console.log(`[Webhook] ✅ Appointment created: ${appointment.id} - ${foundService.name} with ${foundProfessional.name} at ${datetime.toISOString()}`);
+    
+    // Update client payment preference if detected
+    if (booking.paymentMethod) {
+      await db.client.update({
+        where: { id: clientId },
+        data: { paymentPreference: booking.paymentMethod }
+      }).catch(() => {}); // Don't fail if update fails
+    }
+    
+    // Update client total appointments count
+    await db.client.update({
+      where: { id: clientId },
+      data: { totalAppointments: { increment: 1 } }
+    }).catch(() => {});
+    
+    return { success: true, appointmentId: appointment.id };
+  } catch (error) {
+    console.error('[Webhook] Error creating appointment:', error);
+    return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+  }
 }
 
 /**
@@ -771,9 +928,26 @@ async function processMessageWithAI(
 
     // Generate AI response with full context
     console.log(`[Webhook] 🤖 Generating AI response for phone: ${phoneForContext}...`);
-    const response = await generateAIResponse(accountId, phoneForContext, message);
+    const rawResponse = await generateAIResponse(accountId, phoneForContext, message);
 
-    if (response) {
+    if (rawResponse) {
+      // Parse booking command from AI response
+      const { cleanedResponse, booking } = parseBookingCommand(rawResponse);
+      
+      // Create appointment if booking command was found
+      let appointmentId: string | undefined;
+      if (booking) {
+        console.log(`[Webhook] 📅 Booking command detected: ${booking.serviceName} with ${booking.professionalName} on ${booking.date} at ${booking.time}`);
+        const bookingResult = await createAppointmentFromBooking(accountId, clientId, booking);
+        if (bookingResult.success) {
+          appointmentId = bookingResult.appointmentId;
+          console.log(`[Webhook] ✅ Appointment created successfully: ${appointmentId}`);
+        } else {
+          console.error(`[Webhook] ❌ Failed to create appointment: ${bookingResult.error}`);
+        }
+      }
+      
+      const response = cleanedResponse;
       const aiTime = Date.now() - processStart;
       console.log(`[Webhook] 🤖 AI response generated in ${aiTime}ms: "${response.substring(0, 80)}..."`);
       
@@ -785,10 +959,13 @@ async function processMessageWithAI(
           message: response,
           messageType: 'text',
           status: 'pending',
+          appointmentId: appointmentId || undefined,
           metadata: { 
             autoReply: true,
             originalIdentifier: isLidIdentifier(phone) ? phone : undefined,
             processingTimeMs: aiTime,
+            bookingCreated: !!appointmentId,
+            appointmentId: appointmentId || undefined,
           }
         }
       });
