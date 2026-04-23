@@ -96,6 +96,16 @@ export function AdminSettingsPage() {
           evolutionApiUrl,
           evolutionApiKey: evolutionApiKey.includes('•') ? undefined : evolutionApiKey,
           evolutionWebhookUrl,
+          enableAiAssistant: config?.enableAiAssistant,
+          enableMercadoPago: config?.enableMercadoPago,
+          enableNfeGeneration: config?.enableNfeGeneration,
+          platformFeePercent: config?.platformFeePercent,
+          platformFeeFixed: config?.platformFeeFixed,
+          smtpHost: config?.smtpHost,
+          smtpPort: config?.smtpPort,
+          smtpUser: config?.smtpUser,
+          smtpPassword: config?.smtpPassword,
+          emailFrom: config?.emailFrom,
         },
       });
 
@@ -443,8 +453,16 @@ export function AdminSettingsPage() {
                 </div>
                 <Switch
                   checked={config?.enableAiAssistant ?? true}
-                  onCheckedChange={(checked) => {
-                    // Update feature flag
+                  onCheckedChange={async (checked) => {
+                    setConfig(prev => prev ? {...prev, enableAiAssistant: checked} : prev)
+                    try {
+                      await authFetch('/api/admin/system-config', {
+                        method: 'PUT',
+                        body: { enableAiAssistant: checked }
+                      })
+                    } catch (e) {
+                      console.error('Failed to update setting:', e)
+                    }
                   }}
                 />
               </div>
@@ -461,8 +479,16 @@ export function AdminSettingsPage() {
                 </div>
                 <Switch
                   checked={config?.enableMercadoPago ?? true}
-                  onCheckedChange={(checked) => {
-                    // Update feature flag
+                  onCheckedChange={async (checked) => {
+                    setConfig(prev => prev ? {...prev, enableMercadoPago: checked} : prev)
+                    try {
+                      await authFetch('/api/admin/system-config', {
+                        method: 'PUT',
+                        body: { enableMercadoPago: checked }
+                      })
+                    } catch (e) {
+                      console.error('Failed to update setting:', e)
+                    }
                   }}
                 />
               </div>
@@ -479,8 +505,16 @@ export function AdminSettingsPage() {
                 </div>
                 <Switch
                   checked={config?.enableNfeGeneration ?? false}
-                  onCheckedChange={(checked) => {
-                    // Update feature flag
+                  onCheckedChange={async (checked) => {
+                    setConfig(prev => prev ? {...prev, enableNfeGeneration: checked} : prev)
+                    try {
+                      await authFetch('/api/admin/system-config', {
+                        method: 'PUT',
+                        body: { enableNfeGeneration: checked }
+                      })
+                    } catch (e) {
+                      console.error('Failed to update setting:', e)
+                    }
                   }}
                 />
                 <Badge variant="secondary" className="ml-2">Em breve</Badge>
@@ -502,26 +536,53 @@ export function AdminSettingsPage() {
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label htmlFor="smtp-host">Servidor SMTP</Label>
-                  <Input id="smtp-host" placeholder="smtp.example.com" />
+                  <Input
+                    id="smtp-host"
+                    value={config?.smtpHost || ''}
+                    onChange={(e) => setConfig(prev => prev ? {...prev, smtpHost: e.target.value} : prev)}
+                    placeholder="smtp.example.com"
+                  />
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="smtp-port">Porta</Label>
-                  <Input id="smtp-port" type="number" placeholder="587" />
+                  <Input
+                    id="smtp-port"
+                    type="number"
+                    value={config?.smtpPort ?? ''}
+                    onChange={(e) => setConfig(prev => prev ? {...prev, smtpPort: parseInt(e.target.value) || null} : prev)}
+                    placeholder="587"
+                  />
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label htmlFor="smtp-user">Usuário</Label>
-                  <Input id="smtp-user" placeholder="seu-email@example.com" />
+                  <Input
+                    id="smtp-user"
+                    value={config?.smtpUser || ''}
+                    onChange={(e) => setConfig(prev => prev ? {...prev, smtpUser: e.target.value} : prev)}
+                    placeholder="seu-email@example.com"
+                  />
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="smtp-password">Senha</Label>
-                  <Input id="smtp-password" type="password" placeholder="••••••••" />
+                  <Input
+                    id="smtp-password"
+                    type="password"
+                    value={config?.smtpPassword || ''}
+                    onChange={(e) => setConfig(prev => prev ? {...prev, smtpPassword: e.target.value} : prev)}
+                    placeholder="••••••••"
+                  />
                 </div>
               </div>
               <div className="space-y-2">
                 <Label htmlFor="email-from">Email de Remetente</Label>
-                <Input id="email-from" placeholder="noreply@agendazap.com" />
+                <Input
+                  id="email-from"
+                  value={config?.emailFrom || ''}
+                  onChange={(e) => setConfig(prev => prev ? {...prev, emailFrom: e.target.value} : prev)}
+                  placeholder="noreply@agendazap.com"
+                />
               </div>
             </CardContent>
           </Card>
@@ -546,7 +607,7 @@ export function AdminSettingsPage() {
                     step="0.01"
                     placeholder="0.00"
                     value={config?.platformFeePercent ?? 0}
-                    onChange={() => {}}
+                    onChange={(e) => setConfig(prev => prev ? {...prev, platformFeePercent: parseFloat(e.target.value) || 0} : prev)}
                   />
                 </div>
                 <div className="space-y-2">
@@ -557,7 +618,7 @@ export function AdminSettingsPage() {
                     step="0.01"
                     placeholder="0.00"
                     value={config?.platformFeeFixed ?? 0}
-                    onChange={() => {}}
+                    onChange={(e) => setConfig(prev => prev ? {...prev, platformFeeFixed: parseFloat(e.target.value) || 0} : prev)}
                   />
                 </div>
               </div>

@@ -154,17 +154,32 @@ export function LoyaltyPage() {
         setStats(data.stats);
         setTransactions(data.transactions || []);
         setTopClients(data.topClients || []);
-        setFormData({
-          name: data.program.name,
-          pointsPerReal: data.program.pointsPerReal.toString(),
-          redemptionRate: data.program.redemptionRate.toString(),
-          minimumPoints: data.program.minimumPoints.toString(),
-          maxDiscountPercent: data.program.maxDiscountPercent.toString(),
-          pointsExpirationDays: data.program.pointsExpirationDays.toString(),
-          welcomeBonus: data.program.welcomeBonus.toString(),
-          referralBonus: data.program.referralBonus.toString(),
-          isActive: data.program.isActive,
-        });
+        if (data.program) {
+          setFormData({
+            name: data.program.name,
+            pointsPerReal: data.program.pointsPerReal.toString(),
+            redemptionRate: data.program.redemptionRate.toString(),
+            minimumPoints: data.program.minimumPoints.toString(),
+            maxDiscountPercent: data.program.maxDiscountPercent.toString(),
+            pointsExpirationDays: data.program.pointsExpirationDays.toString(),
+            welcomeBonus: data.program.welcomeBonus.toString(),
+            referralBonus: data.program.referralBonus.toString(),
+            isActive: data.program.isActive,
+          });
+        } else {
+          // No program yet — keep defaults so user can create one
+          setFormData({
+            name: 'Programa de Fidelidade',
+            pointsPerReal: '1',
+            redemptionRate: '100',
+            minimumPoints: '100',
+            maxDiscountPercent: '20',
+            pointsExpirationDays: '365',
+            welcomeBonus: '0',
+            referralBonus: '0',
+            isActive: true,
+          });
+        }
       } else {
         toast.error('Erro ao carregar programa de fidelidade');
       }
@@ -778,36 +793,44 @@ export function LoyaltyPage() {
               <CardContent className="px-0">
                 <ScrollArea className="h-[300px]">
                   <div className="space-y-1 px-4">
-                    {topClients.map((client, index) => (
-                      <motion.div
-                        key={client.id}
-                        initial={{ opacity: 0, x: -10 }}
-                        animate={{ opacity: 1, x: 0 }}
-                        transition={{ delay: index * 0.05 }}
-                        className="flex items-center gap-3 p-3 rounded-lg hover:bg-muted/50 transition-colors"
-                      >
-                        <div className={`flex items-center justify-center w-8 h-8 rounded-full text-white font-bold text-sm ${
-                          index === 0 ? 'bg-gradient-to-br from-amber-400 to-orange-500' :
-                          index === 1 ? 'bg-gradient-to-br from-gray-300 to-gray-400' :
-                          index === 2 ? 'bg-gradient-to-br from-amber-600 to-amber-700' :
-                          'bg-muted'
-                        }`}>
-                          {index + 1}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="font-medium truncate">{client.name}</p>
-                          <p className="text-xs text-muted-foreground">
-                            {client.totalAppointments} atendimentos
-                          </p>
-                        </div>
-                        <div className="flex items-center gap-1">
-                          <Star className="h-3 w-3 text-amber-500" />
-                          <span className="font-semibold text-amber-600">
-                            {formatNumber(client.loyaltyPoints)}
-                          </span>
-                        </div>
-                      </motion.div>
-                    ))}
+                    {topClients.length === 0 ? (
+                      <div className="flex flex-col items-center justify-center py-8 text-center">
+                        <Crown className="h-8 w-8 text-muted-foreground mb-2" />
+                        <p className="text-sm text-muted-foreground">Nenhum cliente com pontos ainda</p>
+                        <p className="text-xs text-muted-foreground mt-1">Os clientes aparecerão aqui conforme acumularem pontos</p>
+                      </div>
+                    ) : (
+                      topClients.map((client, index) => (
+                        <motion.div
+                          key={client.id}
+                          initial={{ opacity: 0, x: -10 }}
+                          animate={{ opacity: 1, x: 0 }}
+                          transition={{ delay: index * 0.05 }}
+                          className="flex items-center gap-3 p-3 rounded-lg hover:bg-muted/50 transition-colors"
+                        >
+                          <div className={`flex items-center justify-center w-8 h-8 rounded-full text-white font-bold text-sm ${
+                            index === 0 ? 'bg-gradient-to-br from-amber-400 to-orange-500' :
+                            index === 1 ? 'bg-gradient-to-br from-gray-300 to-gray-400' :
+                            index === 2 ? 'bg-gradient-to-br from-amber-600 to-amber-700' :
+                            'bg-muted'
+                          }`}>
+                            {index + 1}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="font-medium truncate">{client.name}</p>
+                            <p className="text-xs text-muted-foreground">
+                              {client.totalAppointments} atendimentos
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <Star className="h-3 w-3 text-amber-500" />
+                            <span className="font-semibold text-amber-600">
+                              {formatNumber(client.loyaltyPoints)}
+                            </span>
+                          </div>
+                        </motion.div>
+                      ))
+                    )}
                   </div>
                 </ScrollArea>
               </CardContent>
@@ -886,6 +909,25 @@ export function LoyaltyPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
+                  {filteredTransactions.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={6} className="text-center py-12">
+                        <div className="flex flex-col items-center justify-center">
+                          <History className="h-8 w-8 text-muted-foreground mb-2" />
+                          <p className="text-sm text-muted-foreground">
+                            {transactions.length === 0
+                              ? 'Nenhuma transação registrada ainda'
+                              : 'Nenhuma transação encontrada com os filtros aplicados'}
+                          </p>
+                          <p className="text-xs text-muted-foreground mt-1">
+                            {transactions.length === 0
+                              ? 'As transações aparecerão aqui conforme os clientes acumularem ou resgatarem pontos'
+                              : 'Tente ajustar os filtros ou a busca'}
+                          </p>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ) : (
                   <AnimatePresence>
                     {filteredTransactions.map((transaction, index) => (
                       <motion.tr
@@ -926,13 +968,14 @@ export function LoyaltyPage() {
                           {formatDate(transaction.createdAt)}
                         </TableCell>
                         <TableCell className="text-right">
-                          <Button variant="ghost" size="icon" className="opacity-30 pointer-events-none" disabled title="Em breve">
-                            <MoreVertical className="h-4 w-4" />
-                          </Button>
+                          <Badge variant="secondary" className="text-xs text-muted-foreground">
+                            Em breve
+                          </Badge>
                         </TableCell>
                       </motion.tr>
                     ))}
                   </AnimatePresence>
+                  )}
                 </TableBody>
               </Table>
             </ScrollArea>

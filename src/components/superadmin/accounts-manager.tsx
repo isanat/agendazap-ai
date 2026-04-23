@@ -260,19 +260,32 @@ export function AccountsManager() {
     }
   }
 
+  const generateSecurePassword = () => {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789!@#$%'
+    const length = 12
+    let password = ''
+    for (let i = 0; i < length; i++) {
+      password += chars.charAt(Math.floor(Math.random() * chars.length))
+    }
+    return password
+  }
+
   const handleResetPassword = async (account: Account) => {
+    const newPassword = generateSecurePassword()
     try {
       const response = await authFetch('/api/admin/users/password', {
         method: 'POST',
         body: {
           userId: account.User.id,
-          newPassword: '123456'
+          newPassword
         }
       })
       
       if (!response.ok) throw new Error('Erro ao resetar senha')
       
-      toast.success('Senha resetada para: 123456')
+      toast.success(`Senha resetada. Nova senha: ${newPassword}`, {
+        description: 'Compartilhe a nova senha com o usuário de forma segura.'
+      })
     } catch (error) {
       toast.error('Erro ao resetar senha')
     }

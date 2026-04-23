@@ -66,7 +66,9 @@ export function WhatsappPage() {
   const [isInitialLoad, setIsInitialLoad] = useState(true)
   const [isConnected, setIsConnected] = useState(false)
   const [showQRDialog, setShowQRDialog] = useState(false)
-  const [aiEnabled, setAiEnabled] = useState(true)
+  const [aiEnabled, setAiEnabled] = useState(false)
+  const [aiLoading, setAiLoading] = useState(false)
+  const [fetchError, setFetchError] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState('chat')
   const [newMessage, setNewMessage] = useState('')
   const [isSending, setIsSending] = useState(false)
@@ -101,11 +103,25 @@ export function WhatsappPage() {
     }
 
     try {
-      const response = await authFetch(`/api/whatsapp/messages?accountId=${accountId}&limit=100`)
+      setFetchError(null)
+
+      // Fetch messages and account settings in parallel
+      const [messagesRes, accountRes] = await Promise.all([
+        authFetch(`/api/whatsapp/messages?accountId=${accountId}&limit=100`),
+        authFetch('/api/account/me'),
+      ])
       
-      if (!response.ok) throw new Error('Failed to fetch messages')
+      if (!messagesRes.ok) throw new Error('Failed to fetch messages')
       
-      const data = await response.json()
+      const data = await messagesRes.json()
+      
+      // Initialize aiEnabled from account settings
+      if (accountRes.ok) {
+        const accountData = await accountRes.json()
+        if (accountData.account && typeof accountData.account.aiAutoReply === 'boolean') {
+          setAiEnabled(accountData.account.aiAutoReply)
+        }
+      }
       
       // Transform messages and group into conversations
       const transformedMessages: Message[] = (data.messages || []).map((msg: any) => ({
@@ -146,6 +162,7 @@ export function WhatsappPage() {
       setIsInitialLoad(false)
     } catch (err) {
       console.error('Error fetching WhatsApp data:', err)
+      setFetchError('Erro ao carregar dados do WhatsApp. Verifique sua conexão e tente novamente.')
     } finally {
       setIsLoading(false)
       setIsRefreshing(false)
@@ -400,6 +417,21 @@ export function WhatsappPage() {
     )
   }
 
+  // Error state with retry
+  if (fetchError && conversations.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[400px] text-center">
+        <AlertCircle className="w-16 h-16 text-red-500 mb-4" />
+        <h2 className="text-xl font-semibold mb-2">Erro ao carregar</h2>
+        <p className="text-muted-foreground mb-4">{fetchError}</p>
+        <Button onClick={() => fetchData()} variant="outline">
+          <RefreshCw className="w-4 h-4 mr-2" />
+          Tentar Novamente
+        </Button>
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-4">
       {/* Header */}
@@ -424,13 +456,39 @@ export function WhatsappPage() {
               <TooltipTrigger asChild>
                 <Button
                   variant="outline"
-                  onClick={() => setAiEnabled(!aiEnabled)}
+                  onClick={async () => {
+                    const newValue = !aiEnabled
+                    setAiLoading(true)
+                    try {
+                      const res = await authFetch('/api/account/me', {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ aiAutoReply: newValue }),
+                      })
+                      if (res.ok) {
+                        setAiEnabled(newValue)
+                        toast.success(newValue ? 'IA ativada com sucesso' : 'IA desativada')
+                      } else {
+                        toast.error('Erro ao atualizar configuração da IA')
+                      }
+                    } catch {
+                      toast.error('Erro ao atualizar configuração da IA')
+                    } finally {
+                      setAiLoading(false)
+                    }
+                  }}
+                  disabled={aiLoading}
                   className={cn(
                     "transition-all",
                     aiEnabled && "border-violet-500 bg-violet-500/10"
                   )}
                 >
-                  {aiEnabled ? (
+                  {aiLoading ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Atualizando...
+                    </>
+                  ) : aiEnabled ? (
                     <>
                       <ToggleRight className="w-4 h-4 mr-2 text-violet-500" />
                       IA Ativa
@@ -758,7 +816,13 @@ export function WhatsappPage() {
                   clientName={selectedConversation?.name}
                   clientPhone={selectedPhone}
                   onSuggestionAccept={(suggestion) => {
-                    toast.success(`Ação sugerida: ${suggestion.intent}`)
+                    if (suggestion.intent === 'schedule') {
+                      window.location.href = '/?tab=appointments'
+                    } else if (suggestion.intent === 'cancel') {
+                      toast.info('Para cancelar, acesse a página de agendamentos')
+                    } else {
+                      toast.info(`Ação sugerida: ${suggestion.intent}`)
+                    }
                   }}
                 />
               </div>

@@ -159,7 +159,7 @@ function DashboardContent({ accountId }: { accountId?: string | null }) {
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.6 }}
       >
-        <WhatsAppStatusWidget accountId={accountId} />
+        <WhatsAppStatusWidget accountId={accountId} onConnect={() => window.location.href = '/?tab=whatsapp'} />
       </motion.div>
     </motion.div>
   )

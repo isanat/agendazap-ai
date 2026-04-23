@@ -106,7 +106,7 @@ export function RecentActivity({ accountId }: RecentActivityProps) {
             <Clock className="w-4 h-4 text-blue-600" />
             Atividade Recente
           </CardTitle>
-          <Button variant="ghost" size="sm" className="text-xs h-7">
+          <Button variant="ghost" size="sm" className="text-xs h-7" onClick={() => window.location.href = '/?tab=reports'}>
             Ver Todas
             <ArrowRight className="w-3 h-3 ml-1" />
           </Button>

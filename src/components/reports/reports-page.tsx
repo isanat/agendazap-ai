@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { Download, TrendingUp, TrendingDown, Calendar, DollarSign, Users, AlertTriangle, FileText, BarChart3, PieChart, ArrowUpRight, ArrowDownRight, FileSpreadsheet, FileImage, Loader2, CheckCircle, RefreshCw } from 'lucide-react'
+import { Download, TrendingUp, TrendingDown, Calendar, DollarSign, Users, AlertTriangle, FileText, BarChart3, PieChart, ArrowUpRight, ArrowDownRight, FileSpreadsheet, Loader2, CheckCircle, RefreshCw } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -24,8 +24,7 @@ import { authFetch } from '@/lib/auth-fetch'
 
 const exportFormats = [
   { id: 'csv', name: 'CSV', icon: FileSpreadsheet, description: 'Planilha com dados brutos' },
-  { id: 'pdf', name: 'PDF', icon: FileText, description: 'Relatório completo em PDF' },
-  { id: 'png', name: 'Imagem', icon: FileImage, description: 'Gráficos em alta resolução' },
+  { id: 'txt', name: 'Texto', icon: FileText, description: 'Relatório em formato de texto' },
 ]
 
 interface ReportKPIs {
@@ -92,15 +91,18 @@ export function ReportsPage() {
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [reportData, setReportData] = useState<ReportData | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [accountId, setAccountId] = useState<string | null>(null)
+
+  useEffect(() => {
+    const id = typeof window !== 'undefined'
+      ? localStorage.getItem('agendazap-account-id')
+      : null
+    setAccountId(id)
+  }, [])
 
   const loadReportData = async () => {
     try {
       setError(null)
-
-      // Get accountId from localStorage
-      const accountId = typeof window !== 'undefined'
-        ? localStorage.getItem('agendazap-account-id')
-        : null
 
       if (!accountId) {
         setError('Conta não encontrada. Faça login novamente.')
@@ -127,8 +129,8 @@ export function ReportsPage() {
   }
 
   useEffect(() => {
-    loadReportData()
-  }, [period])
+    if (accountId) loadReportData()
+  }, [period, accountId])
 
   const handleRefresh = async () => {
     setIsRefreshing(true)
@@ -241,7 +243,6 @@ export function ReportsPage() {
         // Section 8: Detailed Appointments List
         let appointmentRows: string[][] = []
         try {
-          const accountId = typeof window !== 'undefined' ? localStorage.getItem('agendazap-account-id') : null
           if (accountId) {
             const aptRes = await authFetch(`/api/appointments?accountId=${accountId}&limit=500&period=${period}`)
             if (aptRes.ok) {
@@ -303,8 +304,8 @@ export function ReportsPage() {
           description: 'Formato melhorado com separador ; e encoding pt-BR',
           icon: <CheckCircle className="w-4 h-4 text-green-500" />
         })
-      } else if (exportFormat === 'pdf') {
-        // For PDF, generate a simple text-based report and download
+      } else if (exportFormat === 'txt') {
+        // Generate a simple text-based report and download
         const kpis = reportData.kpis
         const content = `
 RELATÓRIO AGENDAZAP
@@ -338,12 +339,7 @@ ${reportData.topServices.map((s, i) => `${i + 1}. ${s.name} - ${s.count}x - R$ $
         URL.revokeObjectURL(url)
 
         toast.success('Relatório exportado com sucesso!', {
-          description: 'O arquivo foi baixado.',
-          icon: <CheckCircle className="w-4 h-4 text-green-500" />
-        })
-      } else {
-        toast.success(`Relatório exportado em formato ${exportFormat.toUpperCase()}!`, {
-          description: 'O arquivo foi baixado.',
+          description: 'O arquivo de texto foi baixado.',
           icon: <CheckCircle className="w-4 h-4 text-green-500" />
         })
       }
@@ -619,12 +615,12 @@ ${reportData.topServices.map((s, i) => `${i + 1}. ${s.name} - ${s.count}x - R$ $
 
       {/* Charts */}
       <div className="grid gap-6 lg:grid-cols-2">
-        <RevenueChart />
-        <NoShowTrendChart />
+        <RevenueChart accountId={accountId} />
+        <NoShowTrendChart accountId={accountId} />
       </div>
 
       <div className="grid gap-6 lg:grid-cols-3">
-        <ServiceDistributionChart />
+        <ServiceDistributionChart accountId={accountId} />
         
         {/* Top Clients */}
         <Card>

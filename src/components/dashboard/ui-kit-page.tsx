@@ -3,10 +3,6 @@
 import { motion } from 'framer-motion'
 import { Package } from 'lucide-react'
 import {
-  AIInsightsWidget,
-  AIInsightsMini,
-} from '@/components/dashboard/ai-insights-widget'
-import {
   GoalsProgressWidget,
   GoalsProgressMini,
 } from '@/components/dashboard/goals-progress-widget'
@@ -35,17 +31,9 @@ import {
   AppointmentConflictsMini,
 } from '@/components/dashboard/appointment-conflicts-widget'
 import {
-  RevenueForecastWidget,
-  RevenueForecastMini,
-} from '@/components/dashboard/revenue-forecast-widget'
-import {
   WeeklyScheduleOverview,
   WeeklyScheduleMini,
 } from '@/components/dashboard/weekly-schedule-overview'
-import {
-  ClientRetentionAnalytics,
-  ClientRetentionMini,
-} from '@/components/dashboard/client-retention-analytics'
 import {
   QuickReportsGenerator,
   QuickReportsMini,
@@ -59,25 +47,9 @@ import {
   ClientBirthdayMini,
 } from '@/components/dashboard/client-birthday-tracker'
 import {
-  MarketingCampaignWidget,
-  MarketingCampaignMini,
-} from '@/components/dashboard/marketing-campaign-widget'
-import {
-  AIServiceRecommendations,
-  AIServiceRecommendationsMini,
-} from '@/components/dashboard/ai-service-recommendations'
-import {
-  InventoryTrackerWidget,
-  InventoryTrackerMini,
-} from '@/components/dashboard/inventory-tracker-widget'
-import {
   StaffScheduleWidget,
   StaffScheduleMini,
 } from '@/components/dashboard/staff-schedule-widget'
-import {
-  FinancialHealthWidget,
-  FinancialHealthMini,
-} from '@/components/dashboard/financial-health-widget'
 import {
   CustomerFeedbackWidget,
   CustomerFeedbackMini,
@@ -87,25 +59,9 @@ import {
   LoyaltyProgramMini,
 } from '@/components/dashboard/loyalty-program-widget'
 import {
-  CompetitorAnalysisWidget,
-  CompetitorAnalysisMini,
-} from '@/components/dashboard/competitor-analysis-widget'
-import {
   WaitlistManagementWidget,
   WaitlistManagementMini,
 } from '@/components/dashboard/waitlist-management-widget'
-import {
-  PromotionalCodesWidget,
-  PromotionalCodesMini,
-} from '@/components/dashboard/promotional-codes-widget'
-import {
-  RevenueBreakdownWidget,
-  RevenueBreakdownMini,
-} from '@/components/dashboard/revenue-breakdown-widget'
-import {
-  SocialMediaWidget,
-  SocialMediaMini,
-} from '@/components/dashboard/social-media-widget'
 import {
   AppointmentRemindersWidget,
   AppointmentRemindersMini,
@@ -114,10 +70,6 @@ import {
   PerformanceMetricsWidget,
   PerformanceMetricsMini,
 } from '@/components/dashboard/performance-metrics-widget'
-import {
-  RealtimeMetricsWidget,
-  RealtimeMetricsMini,
-} from '@/components/dashboard/realtime-metrics-widget'
 import {
   RealtimeActivityFeed,
   MiniActivityFeed,
@@ -194,14 +146,14 @@ export function UiKitPage() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.05 }}
         >
-          <WidgetCard title="AI Insights">
-            <AIInsightsWidget accountId={undefined} />
-          </WidgetCard>
           <WidgetCard title="Goals Progress">
             <GoalsProgressWidget accountId={undefined} />
           </WidgetCard>
           <WidgetCard title="Stats Comparison">
             <StatsComparisonWidget accountId={undefined} />
+          </WidgetCard>
+          <WidgetCard title="Client Journey Timeline">
+            <ClientJourneyTimeline accountId={undefined} />
           </WidgetCard>
         </motion.div>
 
@@ -212,14 +164,14 @@ export function UiKitPage() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.1 }}
         >
-          <WidgetCard title="Client Journey Timeline">
-            <ClientJourneyTimeline accountId={undefined} />
-          </WidgetCard>
           <WidgetCard title="Service Popularity">
             <ServicePopularityWidget accountId={undefined} />
           </WidgetCard>
           <WidgetCard title="Team Performance">
             <TeamPerformanceWidget accountId={undefined} />
+          </WidgetCard>
+          <WidgetCard title="Notification Preferences">
+            <NotificationPreferencesWidget accountId={undefined} />
           </WidgetCard>
         </motion.div>
 
@@ -230,14 +182,14 @@ export function UiKitPage() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.15 }}
         >
-          <WidgetCard title="Notification Preferences">
-            <NotificationPreferencesWidget accountId={undefined} />
-          </WidgetCard>
           <WidgetCard title="Appointment Conflicts">
             <AppointmentConflictsWidget accountId={undefined} />
           </WidgetCard>
-          <WidgetCard title="Revenue Forecast">
-            <RevenueForecastWidget accountId={undefined} />
+          <WidgetCard title="Weekly Schedule Overview">
+            <WeeklyScheduleOverview accountId={undefined} />
+          </WidgetCard>
+          <WidgetCard title="Quick Reports Generator">
+            <QuickReportsGenerator accountId={undefined} />
           </WidgetCard>
         </motion.div>
 
@@ -248,14 +200,14 @@ export function UiKitPage() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.2 }}
         >
-          <WidgetCard title="Weekly Schedule Overview">
-            <WeeklyScheduleOverview accountId={undefined} />
+          <WidgetCard title="Smart Suggestions">
+            <SmartSuggestionsWidget accountId={undefined} />
           </WidgetCard>
-          <WidgetCard title="Client Retention Analytics">
-            <ClientRetentionAnalytics accountId={undefined} />
+          <WidgetCard title="Client Birthday Tracker">
+            <ClientBirthdayTracker accountId={undefined} />
           </WidgetCard>
-          <WidgetCard title="Quick Reports Generator">
-            <QuickReportsGenerator accountId={undefined} />
+          <WidgetCard title="Staff Schedule">
+            <StaffScheduleWidget accountId={undefined} />
           </WidgetCard>
         </motion.div>
 
@@ -266,14 +218,14 @@ export function UiKitPage() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.25 }}
         >
-          <WidgetCard title="Smart Suggestions">
-            <SmartSuggestionsWidget accountId={undefined} />
+          <WidgetCard title="Customer Feedback">
+            <CustomerFeedbackWidget accountId={undefined} />
           </WidgetCard>
-          <WidgetCard title="Client Birthday Tracker">
-            <ClientBirthdayTracker accountId={undefined} />
+          <WidgetCard title="Loyalty Program">
+            <LoyaltyProgramWidget accountId={undefined} />
           </WidgetCard>
-          <WidgetCard title="Marketing Campaign">
-            <MarketingCampaignWidget accountId={undefined} />
+          <WidgetCard title="Waitlist Management">
+            <WaitlistManagementWidget accountId={undefined} />
           </WidgetCard>
         </motion.div>
 
@@ -284,95 +236,23 @@ export function UiKitPage() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.3 }}
         >
-          <WidgetCard title="AI Service Recommendations">
-            <AIServiceRecommendations accountId={undefined} />
-          </WidgetCard>
-          <WidgetCard title="Inventory Tracker">
-            <InventoryTrackerWidget accountId={undefined} />
-          </WidgetCard>
-          <WidgetCard title="Staff Schedule">
-            <StaffScheduleWidget accountId={undefined} />
-          </WidgetCard>
-        </motion.div>
-
-        {/* Row 7 */}
-        <motion.div
-          className="grid gap-6 lg:grid-cols-3"
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.35 }}
-        >
-          <WidgetCard title="Financial Health">
-            <FinancialHealthWidget accountId={undefined} />
-          </WidgetCard>
-          <WidgetCard title="Customer Feedback">
-            <CustomerFeedbackWidget accountId={undefined} />
-          </WidgetCard>
-          <WidgetCard title="Loyalty Program">
-            <LoyaltyProgramWidget accountId={undefined} />
-          </WidgetCard>
-        </motion.div>
-
-        {/* Row 8 */}
-        <motion.div
-          className="grid gap-6 lg:grid-cols-3"
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.4 }}
-        >
-          <WidgetCard title="Competitor Analysis">
-            <CompetitorAnalysisWidget accountId={undefined} />
-          </WidgetCard>
-          <WidgetCard title="Waitlist Management">
-            <WaitlistManagementWidget accountId={undefined} />
-          </WidgetCard>
-          <WidgetCard title="Promotional Codes">
-            <PromotionalCodesWidget accountId={undefined} />
-          </WidgetCard>
-        </motion.div>
-
-        {/* Row 9 */}
-        <motion.div
-          className="grid gap-6 lg:grid-cols-3"
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.45 }}
-        >
-          <WidgetCard title="Revenue Breakdown">
-            <RevenueBreakdownWidget accountId={undefined} />
-          </WidgetCard>
-          <WidgetCard title="Social Media">
-            <SocialMediaWidget accountId={undefined} />
-          </WidgetCard>
           <WidgetCard title="Appointment Reminders">
             <AppointmentRemindersWidget accountId={undefined} />
           </WidgetCard>
-        </motion.div>
-
-        {/* Row 10 */}
-        <motion.div
-          className="grid gap-6 lg:grid-cols-3"
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.5 }}
-        >
           <WidgetCard title="Performance Metrics">
             <PerformanceMetricsWidget accountId={undefined} />
-          </WidgetCard>
-          <WidgetCard title="Realtime Metrics">
-            <RealtimeMetricsWidget accountId={undefined} />
           </WidgetCard>
           <WidgetCard title="Realtime Activity Feed">
             <RealtimeActivityFeed accountId={undefined} />
           </WidgetCard>
         </motion.div>
 
-        {/* Row 11 – Banners */}
+        {/* Row 7 – Banners */}
         <motion.div
           className="grid gap-6 lg:grid-cols-3"
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.55 }}
+          transition={{ delay: 0.35 }}
         >
           <WidgetCard title="Quick Status Banner">
             <QuickStatusBanner />
@@ -395,16 +275,16 @@ export function UiKitPage() {
           className="grid gap-6 lg:grid-cols-3"
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.6 }}
+          transition={{ delay: 0.4 }}
         >
-          <WidgetCard title="AI Insights Mini">
-            <AIInsightsMini accountId={undefined} />
-          </WidgetCard>
           <WidgetCard title="Goals Progress Mini">
             <GoalsProgressMini accountId={undefined} />
           </WidgetCard>
           <WidgetCard title="Mini Comparison">
             <MiniComparison accountId={undefined} />
+          </WidgetCard>
+          <WidgetCard title="Client Journey Mini">
+            <ClientJourneyMini accountId={undefined} />
           </WidgetCard>
         </motion.div>
 
@@ -413,16 +293,16 @@ export function UiKitPage() {
           className="grid gap-6 lg:grid-cols-3"
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.65 }}
+          transition={{ delay: 0.45 }}
         >
-          <WidgetCard title="Client Journey Mini">
-            <ClientJourneyMini accountId={undefined} />
-          </WidgetCard>
           <WidgetCard title="Service Popularity Mini">
             <ServicePopularityMini accountId={undefined} />
           </WidgetCard>
           <WidgetCard title="Team Performance Mini">
             <TeamPerformanceMini accountId={undefined} />
+          </WidgetCard>
+          <WidgetCard title="Notification Preferences Mini">
+            <NotificationPreferencesMini accountId={undefined} />
           </WidgetCard>
         </motion.div>
 
@@ -431,16 +311,16 @@ export function UiKitPage() {
           className="grid gap-6 lg:grid-cols-3"
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.7 }}
+          transition={{ delay: 0.5 }}
         >
-          <WidgetCard title="Notification Preferences Mini">
-            <NotificationPreferencesMini accountId={undefined} />
-          </WidgetCard>
           <WidgetCard title="Appointment Conflicts Mini">
             <AppointmentConflictsMini accountId={undefined} />
           </WidgetCard>
-          <WidgetCard title="Revenue Forecast Mini">
-            <RevenueForecastMini accountId={undefined} />
+          <WidgetCard title="Weekly Schedule Mini">
+            <WeeklyScheduleMini accountId={undefined} />
+          </WidgetCard>
+          <WidgetCard title="Quick Reports Mini">
+            <QuickReportsMini accountId={undefined} />
           </WidgetCard>
         </motion.div>
 
@@ -449,16 +329,16 @@ export function UiKitPage() {
           className="grid gap-6 lg:grid-cols-3"
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.75 }}
+          transition={{ delay: 0.55 }}
         >
-          <WidgetCard title="Weekly Schedule Mini">
-            <WeeklyScheduleMini accountId={undefined} />
+          <WidgetCard title="Smart Suggestions Mini">
+            <SmartSuggestionsMini accountId={undefined} />
           </WidgetCard>
-          <WidgetCard title="Client Retention Mini">
-            <ClientRetentionMini accountId={undefined} />
+          <WidgetCard title="Client Birthday Mini">
+            <ClientBirthdayMini accountId={undefined} />
           </WidgetCard>
-          <WidgetCard title="Quick Reports Mini">
-            <QuickReportsMini accountId={undefined} />
+          <WidgetCard title="Staff Schedule Mini">
+            <StaffScheduleMini accountId={undefined} />
           </WidgetCard>
         </motion.div>
 
@@ -467,16 +347,16 @@ export function UiKitPage() {
           className="grid gap-6 lg:grid-cols-3"
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.8 }}
+          transition={{ delay: 0.6 }}
         >
-          <WidgetCard title="Smart Suggestions Mini">
-            <SmartSuggestionsMini accountId={undefined} />
+          <WidgetCard title="Customer Feedback Mini">
+            <CustomerFeedbackMini accountId={undefined} />
           </WidgetCard>
-          <WidgetCard title="Client Birthday Mini">
-            <ClientBirthdayMini accountId={undefined} />
+          <WidgetCard title="Loyalty Program Mini">
+            <LoyaltyProgramMini accountId={undefined} />
           </WidgetCard>
-          <WidgetCard title="Marketing Campaign Mini">
-            <MarketingCampaignMini accountId={undefined} />
+          <WidgetCard title="Waitlist Management Mini">
+            <WaitlistManagementMini accountId={undefined} />
           </WidgetCard>
         </motion.div>
 
@@ -485,85 +365,13 @@ export function UiKitPage() {
           className="grid gap-6 lg:grid-cols-3"
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.85 }}
+          transition={{ delay: 0.65 }}
         >
-          <WidgetCard title="AI Service Recommendations Mini">
-            <AIServiceRecommendationsMini accountId={undefined} />
-          </WidgetCard>
-          <WidgetCard title="Inventory Tracker Mini">
-            <InventoryTrackerMini accountId={undefined} />
-          </WidgetCard>
-          <WidgetCard title="Staff Schedule Mini">
-            <StaffScheduleMini accountId={undefined} />
-          </WidgetCard>
-        </motion.div>
-
-        {/* Mini Row 7 */}
-        <motion.div
-          className="grid gap-6 lg:grid-cols-3"
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.9 }}
-        >
-          <WidgetCard title="Financial Health Mini">
-            <FinancialHealthMini accountId={undefined} />
-          </WidgetCard>
-          <WidgetCard title="Customer Feedback Mini">
-            <CustomerFeedbackMini accountId={undefined} />
-          </WidgetCard>
-          <WidgetCard title="Loyalty Program Mini">
-            <LoyaltyProgramMini accountId={undefined} />
-          </WidgetCard>
-        </motion.div>
-
-        {/* Mini Row 8 */}
-        <motion.div
-          className="grid gap-6 lg:grid-cols-3"
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.95 }}
-        >
-          <WidgetCard title="Competitor Analysis Mini">
-            <CompetitorAnalysisMini accountId={undefined} />
-          </WidgetCard>
-          <WidgetCard title="Waitlist Management Mini">
-            <WaitlistManagementMini accountId={undefined} />
-          </WidgetCard>
-          <WidgetCard title="Promotional Codes Mini">
-            <PromotionalCodesMini accountId={undefined} />
-          </WidgetCard>
-        </motion.div>
-
-        {/* Mini Row 9 */}
-        <motion.div
-          className="grid gap-6 lg:grid-cols-3"
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 1.0 }}
-        >
-          <WidgetCard title="Revenue Breakdown Mini">
-            <RevenueBreakdownMini accountId={undefined} />
-          </WidgetCard>
-          <WidgetCard title="Social Media Mini">
-            <SocialMediaMini accountId={undefined} />
-          </WidgetCard>
           <WidgetCard title="Appointment Reminders Mini">
             <AppointmentRemindersMini accountId={undefined} />
           </WidgetCard>
-        </motion.div>
-
-        {/* Mini Row 10 */}
-        <motion.div
-          className="grid gap-6 lg:grid-cols-3"
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 1.05 }}
-        >
           <WidgetCard title="Performance Metrics Mini">
             <PerformanceMetricsMini accountId={undefined} />
-          </WidgetCard>
-          <WidgetCard title="Realtime Metrics Mini">
-            <RealtimeMetricsMini accountId={undefined} />
           </WidgetCard>
           <WidgetCard title="Mini Activity Feed">
             <MiniActivityFeed accountId={undefined} />

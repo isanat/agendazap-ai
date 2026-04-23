@@ -1,7 +1,7 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
-import { Plus, Edit, Trash2, Phone, Mail, Calendar, Search, AlertTriangle, CheckCircle, Users, Shield, Info, Download, MessageSquare, Loader2, FileSpreadsheet, FileText, CheckCircle2 } from 'lucide-react'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { Plus, Edit, Trash2, Phone, Mail, Calendar, Search, AlertTriangle, CheckCircle, Users, Shield, Info, Download, MessageSquare, Loader2, FileText, CheckCircle2 } from 'lucide-react'
 import { authFetch } from '@/lib/auth-fetch'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -84,7 +84,7 @@ export function ClientsPage() {
   const [clients, setClients] = useState<Client[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [isRefreshing, setIsRefreshing] = useState(false)
-  const [isInitialLoad, setIsInitialLoad] = useState(true)
+  const isInitialLoad = useRef(true)
   const [error, setError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const [riskFilter, setRiskFilter] = useState<string>('all')
@@ -113,12 +113,12 @@ export function ClientsPage() {
   const fetchClients = useCallback(async (isRefresh = false) => {
     if (!accountId) {
       setIsLoading(false)
-      setIsInitialLoad(false)
+      isInitialLoad.current = false
       return
     }
 
     // Only show full loading on initial load
-    if (isInitialLoad && !isRefresh) {
+    if (isInitialLoad.current && !isRefresh) {
       setIsLoading(true)
     } else if (isRefresh) {
       setIsRefreshing(true)
@@ -142,7 +142,7 @@ export function ClientsPage() {
         notes: client.notes
       }))
       setClients(transformedClients)
-      setIsInitialLoad(false)
+      isInitialLoad.current = false
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An error occurred')
       console.error('Error fetching clients:', err)
@@ -150,7 +150,7 @@ export function ClientsPage() {
       setIsLoading(false)
       setIsRefreshing(false)
     }
-  }, [accountId, isInitialLoad])
+  }, [accountId])
 
   useEffect(() => {
     fetchClients()
@@ -185,12 +185,21 @@ export function ClientsPage() {
     }
   }
 
+  const sanitizeCsvValue = (value: string): string => {
+    const str = String(value || '')
+    // Escape double quotes
+    const escaped = str.replace(/"/g, '""')
+    // Prefix dangerous characters to prevent CSV injection
+    if (/^[=+\-@]/.test(escaped)) {
+      return '" \'' + escaped + '"'
+    }
+    return '"' + escaped + '"'
+  }
+
   const handleExport = async () => {
     if (!exportFormat) return
     
     setIsExporting(true)
-    await new Promise(resolve => setTimeout(resolve, 500))
-    setIsExporting(false)
     setShowExportDialog(false)
     
     const clientsToExport = selectedClients.length > 0 
@@ -209,13 +218,15 @@ export function ClientsPage() {
       c.lastVisit ? new Date(c.lastVisit).toLocaleDateString('pt-BR') : 'Nunca'
     ])
     
-    const csv = [headers, ...rows].map(row => row.join(',')).join('\n')
+    const csv = [headers, ...rows].map(row => row.map(sanitizeCsvValue).join(',')).join('\n')
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
     link.download = `clientes-agendazap-${new Date().toISOString().split('T')[0]}.csv`
     link.click()
+    
+    setIsExporting(false)
     
     toast.success(`${clientsToExport.length} clientes exportados com sucesso!`, {
       icon: <CheckCircle2 className="w-4 h-4 text-green-500" />
@@ -279,6 +290,8 @@ export function ClientsPage() {
       return
     }
 
+    setIsSaving(true)
+
     try {
       if (editingClient) {
         // Update existing client
@@ -326,6 +339,8 @@ export function ClientsPage() {
     } catch (err) {
       toast.error('Erro ao salvar cliente')
       console.error(err)
+    } finally {
+      setIsSaving(false)
     }
   }
 
@@ -375,7 +390,7 @@ export function ClientsPage() {
   }
 
   // Loading state - only show skeleton on INITIAL load
-  if (isLoading && isInitialLoad) {
+  if (isLoading && isInitialLoad.current) {
     return (
       <div className="space-y-6">
         <div className="flex justify-between items-center">
@@ -461,15 +476,8 @@ export function ClientsPage() {
                 setExportFormat('csv')
                 setShowExportDialog(true)
               }}>
-                <FileSpreadsheet className="w-4 h-4 mr-2" />
-                Exportar CSV
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => {
-                setExportFormat('xlsx')
-                setShowExportDialog(true)
-              }}>
                 <FileText className="w-4 h-4 mr-2" />
-                Exportar Excel
+                Exportar CSV
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem onClick={handleBulkWhatsApp}>
@@ -543,8 +551,15 @@ export function ClientsPage() {
                 <Button variant="outline" onClick={() => setIsDialogOpen(false)}>
                   Cancelar
                 </Button>
-                <Button onClick={handleSave} className="bg-gradient-to-r from-green-500 to-emerald-600">
-                  Salvar
+                <Button onClick={handleSave} className="bg-gradient-to-r from-green-500 to-emerald-600" disabled={isSaving}>
+                  {isSaving ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Salvando...
+                    </>
+                  ) : (
+                    'Salvar'
+                  )}
                 </Button>
               </DialogFooter>
             </DialogContent>

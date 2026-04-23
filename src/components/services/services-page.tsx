@@ -1,7 +1,7 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
-import { Plus, Edit, Trash2, Clock, DollarSign, Search, Sparkles, Grid, List, Tag, Loader2 } from 'lucide-react'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { Plus, Edit, Trash2, Clock, DollarSign, Search, Sparkles, Tag, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { motion, AnimatePresence } from 'framer-motion'
 import { authFetch } from '@/lib/auth-fetch'
@@ -76,11 +76,11 @@ export function ServicesPage() {
   const [services, setServices] = useState<Service[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [isRefreshing, setIsRefreshing] = useState(false)
-  const [isInitialLoad, setIsInitialLoad] = useState(true)
+  const isInitialLoad = useRef(true)
   const [error, setError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const [categoryFilter, setCategoryFilter] = useState('all')
-  const [viewMode, setViewMode] = useState<'table' | 'grid'>('table')
+
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [editingService, setEditingService] = useState<Service | null>(null)
   const [isSaving, setIsSaving] = useState(false)
@@ -135,12 +135,12 @@ export function ServicesPage() {
   const fetchServices = useCallback(async (isRefresh = false) => {
     if (!accountId) {
       setIsLoading(false)
-      setIsInitialLoad(false)
+      isInitialLoad.current = false
       return
     }
 
     // Only show full loading on initial load
-    if (isInitialLoad && !isRefresh) {
+    if (isInitialLoad.current && !isRefresh) {
       setIsLoading(true)
     } else if (isRefresh) {
       setIsRefreshing(true)
@@ -162,7 +162,7 @@ export function ServicesPage() {
         category: service.category || 'corte'
       }))
       setServices(transformedServices)
-      setIsInitialLoad(false)
+      isInitialLoad.current = false
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An error occurred')
       console.error('Error fetching services:', err)
@@ -170,7 +170,7 @@ export function ServicesPage() {
       setIsLoading(false)
       setIsRefreshing(false)
     }
-  }, [accountId, isInitialLoad])
+  }, [accountId])
 
   useEffect(() => {
     fetchServices()
@@ -274,7 +274,7 @@ export function ServicesPage() {
   }
 
   // Loading state - only show skeleton on INITIAL load
-  if (isLoading && isInitialLoad) {
+  if (isLoading && isInitialLoad.current) {
     return (
       <div className="space-y-6">
         <div className="flex justify-between items-center">
@@ -348,25 +348,6 @@ export function ServicesPage() {
               ))}
             </SelectContent>
           </Select>
-          
-          <div className="flex gap-1 border rounded-lg p-1">
-            <Button 
-              variant={viewMode === 'table' ? 'secondary' : 'ghost'} 
-              size="icon"
-              className="h-8 w-8"
-              onClick={() => setViewMode('table')}
-            >
-              <List className="w-4 h-4" />
-            </Button>
-            <Button 
-              variant={viewMode === 'grid' ? 'secondary' : 'ghost'} 
-              size="icon"
-              className="h-8 w-8"
-              onClick={() => setViewMode('grid')}
-            >
-              <Grid className="w-4 h-4" />
-            </Button>
-          </div>
           
           <Dialog open={isDialogOpen} onOpenChange={(open) => {
             if (open) {

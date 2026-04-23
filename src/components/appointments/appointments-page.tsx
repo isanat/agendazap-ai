@@ -269,13 +269,16 @@ export function AppointmentsPage() {
   const [draggedAppointment, setDraggedAppointment] = useState<Appointment | null>(null)
   const [isSaving, setIsSaving] = useState(false)
   const [formData, setFormData] = useState({
+    clientId: '' as string,
     clientName: '',
     clientPhone: '',
+    serviceId: '' as string,
     serviceName: '',
     professionalId: '',
     date: format(new Date(), 'yyyy-MM-dd'),
     time: '09:00',
     notes: '',
+    status: 'pending' as string,
     isRecurring: false,
     recurringType: 'weekly',
     recurringCount: 4
@@ -433,13 +436,16 @@ export function AppointmentsPage() {
     if (appointment) {
       setSelectedAppointment(appointment)
       setFormData({
+        clientId: appointment.clientId,
         clientName: appointment.clientName,
         clientPhone: appointment.clientPhone,
+        serviceId: appointment.serviceId,
         serviceName: appointment.serviceName,
         professionalId: appointment.professionalId,
         date: appointment.date,
         time: appointment.time,
         notes: appointment.notes,
+        status: appointment.status,
         isRecurring: false,
         recurringType: 'weekly',
         recurringCount: 4
@@ -447,13 +453,16 @@ export function AppointmentsPage() {
     } else {
       setSelectedAppointment(null)
       setFormData({
+        clientId: '',
         clientName: '',
         clientPhone: '',
+        serviceId: '',
         serviceName: '',
         professionalId: '',
         date: format(selectedDate, 'yyyy-MM-dd'),
         time: '09:00',
         notes: '',
+        status: 'pending',
         isRecurring: false,
         recurringType: 'weekly',
         recurringCount: 4
@@ -482,11 +491,14 @@ export function AppointmentsPage() {
     setIsSaving(true)
 
     try {
-      const service = services.find(s => s.name === formData.serviceName)
+      // Prefer serviceId from formData, fall back to name lookup
+      const service = formData.serviceId
+        ? services.find(s => s.id === formData.serviceId)
+        : services.find(s => s.name === formData.serviceName)
       const professional = professionals.find(p => p.id === formData.professionalId)
       
       // Find or create client
-      let clientId = selectedAppointment?.clientId
+      let clientId = selectedAppointment?.clientId || formData.clientId || undefined
       if (!clientId) {
         const existingClient = clients.find(c => 
           c.name.toLowerCase() === formData.clientName.toLowerCase() ||
@@ -500,15 +512,38 @@ export function AppointmentsPage() {
       const datetime = new Date(`${formData.date}T${formData.time}:00`)
 
       if (selectedAppointment) {
-        // Update existing appointment
+        // Update existing appointment - include all editable fields
+        const updateBody: Record<string, unknown> = {
+          id: selectedAppointment.id,
+          professionalId: formData.professionalId,
+          notes: formData.notes,
+        }
+
+        // Include clientId if changed or available
+        if (clientId) {
+          updateBody.clientId = clientId
+        }
+
+        // Include serviceId if available
+        const resolvedServiceId = service?.id || formData.serviceId
+        if (resolvedServiceId) {
+          updateBody.serviceId = resolvedServiceId
+        }
+
+        // Include datetime if date or time changed
+        if (formData.date && formData.time) {
+          updateBody.datetime = datetime.toISOString()
+        }
+
+        // Include status if changed
+        if (formData.status) {
+          updateBody.status = formData.status
+        }
+
         const response = await authFetch('/api/appointments', {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            id: selectedAppointment.id,
-            professionalId: formData.professionalId,
-            notes: formData.notes
-          })
+          body: JSON.stringify(updateBody)
         })
 
         if (!response.ok) throw new Error('Failed to update appointment')
@@ -611,7 +646,8 @@ export function AppointmentsPage() {
               id: appointmentId,
               datetime: newDatetime.toISOString()
             })
-          }).then(() => {
+          }).then(async (response) => {
+            if (!response.ok) throw new Error('Failed to update')
             fetchData()
             toast.success(`Agendamento de ${apt.clientName} movido para ${newTime}`)
           }).catch(() => {
@@ -926,13 +962,16 @@ export function AppointmentsPage() {
                 onConvertToAppointment={(entry) => {
                   // Pre-fill the appointment dialog with waitlist data
                   setFormData({
+                    clientId: '',
                     clientName: entry.clientName,
                     clientPhone: entry.clientPhone,
+                    serviceId: '',
                     serviceName: entry.serviceName,
                     professionalId: entry.professionalId,
                     date: entry.preferredDate,
                     time: entry.preferredTimeStart,
                     notes: entry.notes,
+                    status: 'pending',
                     isRecurring: false,
                     recurringType: 'weekly',
                     recurringCount: 4

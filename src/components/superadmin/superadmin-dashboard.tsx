@@ -167,7 +167,7 @@ export function SuperAdminDashboard() {
   const [planDistribution, setPlanDistribution] = useState<PlanDistribution[]>([])
   const [recentActivity, setRecentActivity] = useState<RecentActivity[]>([])
   const [systemHealth, setSystemHealth] = useState<SystemHealth>({
-    status: 'healthy', uptime: 99.97, responseTime: 145, errorRate: 0.02,
+    status: 'unknown', uptime: 0, responseTime: 0, errorRate: 0,
     activeConnections: 0, messagesToday: 0, apiCalls: 0
   })
 
@@ -202,13 +202,10 @@ export function SuperAdminDashboard() {
     fetchData()
   }, [])
 
-  // Calculate appointment stats for chart
-  const appointmentChartData = [
-    { label: 'Pendente', value: Math.floor(stats.appointmentsThisMonth * 0.3), color: 'bg-amber-500' },
-    { label: 'Confirmado', value: Math.floor(stats.appointmentsThisMonth * 0.5), color: 'bg-green-500' },
-    { label: 'Concluído', value: Math.floor(stats.appointmentsThisMonth * 0.15), color: 'bg-blue-500' },
-    { label: 'No-Show', value: Math.floor(stats.appointmentsThisMonth * 0.05), color: 'bg-red-500' },
-  ]
+  // Appointment chart data - only show if API provides status distribution
+  const appointmentChartData: { label: string; value: number; color: string }[] = []
+  // Note: The API does not currently return appointment status distribution.
+  // When the API is updated to include this data, populate appointmentChartData here.
 
   // Show skeleton on initial load
   if (loading && stats.totalAccounts === 0) {
@@ -379,7 +376,14 @@ export function SuperAdminDashboard() {
               </CardTitle>
             </CardHeader>
             <CardContent className="pt-4">
-              <SimpleBarChart data={appointmentChartData} />
+              {appointmentChartData.length > 0 ? (
+                <SimpleBarChart data={appointmentChartData} />
+              ) : (
+                <div className="text-center py-6 text-muted-foreground text-sm">
+                  <BarChart3 className="w-10 h-10 mx-auto mb-2 opacity-30" />
+                  N/A
+                </div>
+              )}
             </CardContent>
           </Card>
         </motion.div>
@@ -408,11 +412,13 @@ export function SuperAdminDashboard() {
                   <span className="text-sm font-medium">Status</span>
                   <div className="flex items-center gap-2">
                     <div className="relative">
-                      <div className="w-2 h-2 rounded-full bg-green-500" />
-                      <div className="absolute inset-0 w-2 h-2 rounded-full bg-green-500 animate-ping" />
+                      <div className={cn('w-2 h-2 rounded-full', systemHealth?.status === 'healthy' ? 'bg-green-500' : 'bg-yellow-500')} />
+                      {systemHealth?.status === 'healthy' && (
+                        <div className="absolute inset-0 w-2 h-2 rounded-full bg-green-500 animate-ping" />
+                      )}
                     </div>
-                    <Badge variant="outline" className="border-green-500 text-green-600 bg-green-50 dark:bg-green-900/20">
-                      Operacional
+                    <Badge variant="outline" className={systemHealth?.status === 'healthy' ? 'border-green-500 text-green-600 bg-green-50 dark:bg-green-900/20' : 'border-yellow-500 text-yellow-600 bg-yellow-50 dark:bg-yellow-900/20'}>
+                      {systemHealth?.status === 'healthy' ? 'Operacional' : 'Atenção'}
                     </Badge>
                   </div>
                 </motion.div>

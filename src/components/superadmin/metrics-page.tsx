@@ -144,6 +144,16 @@ function BarChartSimple({ data }: { data: { label: string; value: number; color:
   )
 }
 
+interface SystemHealthData {
+  status: string
+  uptime: number
+  responseTime: number
+  errorRate: number
+  activeConnections: number
+  messagesToday: number
+  apiCalls: number
+}
+
 export function MetricsPage() {
   const [isLoading, setIsLoading] = useState(true)
   const [timeRange, setTimeRange] = useState('30d')
@@ -153,6 +163,7 @@ export function MetricsPage() {
     datasets: []
   })
   const [barData, setBarData] = useState<{ label: string; value: number; color: string }[]>([])
+  const [systemHealth, setSystemHealth] = useState<SystemHealthData | null>(null)
 
   useEffect(() => {
     const fetchData = async () => {
@@ -166,12 +177,17 @@ export function MetricsPage() {
           // Set metrics from real data
           setMetrics([
             { label: 'Total Empresas', value: data.stats.totalAccounts, change: data.stats.growthRate, trend: data.stats.growthRate >= 0 ? 'up' : 'down' },
-            { label: 'Usuários Ativos', value: data.stats.activeUsers, change: 5, trend: 'up' },
-            { label: 'Agendamentos/Mês', value: data.stats.appointmentsThisMonth, change: 12, trend: 'up' },
-            { label: 'Taxa No-Show', value: data.stats.noShowRate, change: -3, trend: 'down' },
-            { label: 'Clientes Total', value: data.stats.totalClients, change: 8, trend: 'up' },
+            { label: 'Usuários Ativos', value: data.stats.activeUsers, change: 0, trend: 'stable' as const },
+            { label: 'Agendamentos/Mês', value: data.stats.appointmentsThisMonth, change: 0, trend: 'stable' as const },
+            { label: 'Taxa No-Show', value: data.stats.noShowRate, change: 0, trend: 'stable' as const },
+            { label: 'Clientes Total', value: data.stats.totalClients, change: 0, trend: 'stable' as const },
             { label: 'Novos Cadastros', value: data.stats.newAccountsThisMonth, change: data.stats.growthRate, trend: data.stats.growthRate >= 0 ? 'up' : 'down' },
           ])
+          
+          // Set system health from real data
+          if (data.systemHealth) {
+            setSystemHealth(data.systemHealth)
+          }
           
           // Create chart data from real data
           const months = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun']
@@ -370,8 +386,8 @@ export function MetricsPage() {
                 {[
                   { label: 'Novas Empresas', value: metrics[5]?.value || 0, total: 100 },
                   { label: 'Agendamentos Realizados', value: metrics[2]?.value || 0, total: 500 },
-                  { label: 'Taxa de Conversão', value: '23%', total: 100 },
-                  { label: 'Satisfação Média', value: '4.8/5', total: 5 },
+                  { label: 'Taxa de Conversão', value: 'N/A', total: 100 },
+                  { label: 'Satisfação Média', value: 'N/A', total: 5 },
                 ].map((item, i) => (
                   <div key={i} className="space-y-1">
                     <div className="flex justify-between text-sm">
@@ -390,14 +406,14 @@ export function MetricsPage() {
               </CardHeader>
               <CardContent className="space-y-3">
                 {[
-                  { label: 'Uptime', value: '99.97%', status: 'success' },
-                  { label: 'Latência Média', value: '145ms', status: 'success' },
-                  { label: 'Taxa de Erros', value: '0.02%', status: 'success' },
-                  { label: 'Backup Status', value: 'Atualizado', status: 'success' },
+                  { label: 'Uptime', value: systemHealth?.uptime ? `${systemHealth.uptime}%` : 'N/A', status: systemHealth?.status === 'healthy' ? 'success' : 'secondary' as const },
+                  { label: 'Latência Média', value: systemHealth?.responseTime ? `${systemHealth.responseTime}ms` : 'N/A', status: systemHealth?.status === 'healthy' ? 'success' : 'secondary' as const },
+                  { label: 'Taxa de Erros', value: systemHealth?.errorRate !== undefined ? `${systemHealth.errorRate}%` : 'N/A', status: systemHealth?.status === 'healthy' ? 'success' : 'secondary' as const },
+                  { label: 'Backup Status', value: 'N/A', status: 'secondary' as const },
                 ].map((item, i) => (
                   <div key={i} className="flex items-center justify-between p-2 bg-muted/30 rounded-lg">
                     <span className="text-sm">{item.label}</span>
-                    <Badge variant={item.status === 'success' ? 'default' : 'destructive'} className="text-xs">
+                    <Badge variant={item.status === 'success' ? 'default' : 'secondary'} className="text-xs">
                       {item.value}
                     </Badge>
                   </div>

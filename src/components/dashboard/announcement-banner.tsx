@@ -40,24 +40,7 @@ interface AnnouncementBannerProps {
   onDismiss?: (id: string) => void
 }
 
-const defaultAnnouncements: Announcement[] = [
-  {
-    id: '1',
-    type: 'promo',
-    title: '🎉 Experimente a IA Luna!',
-    description: 'Nova funcionalidade: Assistente virtual inteligente para atendimento automático via WhatsApp.',
-    action: { label: 'Conhecer', href: '/?tab=whatsapp' },
-    dismissible: true,
-  },
-  {
-    id: '2',
-    type: 'update',
-    title: 'Novo: Relatórios avançados',
-    description: 'Agora você pode exportar relatórios detalhados em PDF e Excel.',
-    action: { label: 'Ver relatórios', href: '/?tab=reports' },
-    dismissible: true,
-  },
-]
+const defaultAnnouncements: Announcement[] = []
 
 const typeStyles = {
   promo: {

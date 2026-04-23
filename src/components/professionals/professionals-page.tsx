@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { Plus, Edit, Trash2, Mail, Phone, Calendar, Search, Clock, Briefcase, Filter, Scissors, Sparkles, Users, ChevronDown, CheckCircle, XCircle, Loader2 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { authFetch } from '@/lib/auth-fetch'
@@ -76,7 +76,7 @@ export function ProfessionalsPage() {
   const [professionals, setProfessionals] = useState<Professional[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [isRefreshing, setIsRefreshing] = useState(false)
-  const [isInitialLoad, setIsInitialLoad] = useState(true)
+  const isInitialLoad = useRef(true)
   const [error, setError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('all')
@@ -102,12 +102,12 @@ export function ProfessionalsPage() {
   const fetchProfessionals = useCallback(async (isRefresh = false) => {
     if (!accountId) {
       setIsLoading(false)
-      setIsInitialLoad(false)
+      isInitialLoad.current = false
       return
     }
 
     // Only show full loading on initial load
-    if (isInitialLoad && !isRefresh) {
+    if (isInitialLoad.current && !isRefresh) {
       setIsLoading(true)
     } else if (isRefresh) {
       setIsRefreshing(true)
@@ -134,7 +134,7 @@ export function ProfessionalsPage() {
         appointmentCount: prof.appointmentCount || 0
       }))
       setProfessionals(transformedProfessionals)
-      setIsInitialLoad(false)
+      isInitialLoad.current = false
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An error occurred')
       console.error('Error fetching professionals:', err)
@@ -142,7 +142,7 @@ export function ProfessionalsPage() {
       setIsLoading(false)
       setIsRefreshing(false)
     }
-  }, [accountId, isInitialLoad])
+  }, [accountId])
 
   useEffect(() => {
     fetchProfessionals()
@@ -237,6 +237,7 @@ export function ProfessionalsPage() {
             phone: formData.phone,
             email: formData.email,
             color: formData.color,
+            isActive: formData.isActive,
             services: formData.services
           })
         })
@@ -295,7 +296,7 @@ export function ProfessionalsPage() {
   }
 
   // Loading state - only show skeleton on INITIAL load
-  if (isLoading && isInitialLoad) {
+  if (isLoading && isInitialLoad.current) {
     return (
       <div className="space-y-6">
         <div className="flex justify-between items-center">

@@ -20,6 +20,8 @@ interface PerformanceMetric {
   trendValue: string
   color: string
   icon: typeof Target
+  unavailable?: boolean
+  noTarget?: boolean
 }
 
 function CircularProgress({ value, target, color }: { value: number; target: number; color: string }) {
@@ -80,36 +82,43 @@ export function PerformanceWidget({ accountId }: PerformanceWidgetProps) {
         const response = await authFetch(`/api/dashboard/stats?accountId=${accountId}`)
         if (response.ok) {
           const data = await response.json()
+          const hasSatisfactionRate = data.stats?.satisfactionRate != null && data.stats?.satisfactionRate >= 0
+          const monthlyTarget = data.stats?.monthlyRevenueTarget || 0
+          const occupancyTarget = data.stats?.occupancyTarget || 0
+
           setMetrics([
             {
               label: 'Meta Mensal',
               value: data.stats?.monthRevenue || 0,
-              target: data.stats?.monthlyRevenueTarget || 0,
+              target: monthlyTarget,
               unit: 'R$',
               trend: data.stats?.growthRate > 0 ? 'up' : 'neutral',
               trendValue: `${data.stats?.growthRate || 0}%`,
               color: 'green',
-              icon: Target
+              icon: Target,
+              noTarget: monthlyTarget === 0
             },
             {
               label: 'Satisfação',
-              value: data.stats?.satisfactionRate ?? -1,
+              value: hasSatisfactionRate ? data.stats.satisfactionRate : 0,
               target: 100,
               unit: '%',
               trend: 'neutral',
               trendValue: '-',
               color: 'blue',
-              icon: Award
+              icon: Award,
+              unavailable: !hasSatisfactionRate
             },
             {
               label: 'Ocupação',
               value: data.stats?.occupancyRate || 0,
-              target: data.stats?.occupancyTarget || 0,
+              target: occupancyTarget,
               unit: '%',
               trend: 'neutral',
               trendValue: '-',
               color: 'purple',
-              icon: Clock
+              icon: Clock,
+              noTarget: occupancyTarget === 0
             }
           ])
         }
@@ -198,11 +207,18 @@ export function PerformanceWidget({ accountId }: PerformanceWidgetProps) {
                 <div className="flex items-center justify-between mb-1">
                   <span className="text-sm font-medium">{metric.label}</span>
                   <span className="text-sm font-bold">
-                    {metric.unit === 'R$' ? `${metric.unit} ${metric.value.toLocaleString('pt-BR')}` : `${metric.value}${metric.unit}`}
+                    {metric.unavailable
+                      ? 'N/A'
+                      : metric.noTarget
+                        ? 'Não definida'
+                        : metric.unit === 'R$'
+                          ? `${metric.unit} ${metric.value.toLocaleString('pt-BR')}`
+                          : `${metric.value}${metric.unit}`}
                   </span>
                 </div>
                 
                 <div className="flex items-center gap-2">
+                  {!metric.unavailable && !metric.noTarget && (
                   <div className="flex-1 h-2 bg-muted rounded-full overflow-hidden">
                     <motion.div
                       initial={{ width: 0 }}
@@ -216,7 +232,10 @@ export function PerformanceWidget({ accountId }: PerformanceWidgetProps) {
                       )}
                     />
                   </div>
+                  )}
+                  {(metric.unavailable || metric.noTarget) && <div className="flex-1" />}
                   
+                  {!(metric.unavailable || metric.noTarget) && (
                   <div className={cn(
                     'flex items-center gap-0.5 text-xs font-medium',
                     metric.trend === 'up' && 'text-green-600',
@@ -228,6 +247,7 @@ export function PerformanceWidget({ accountId }: PerformanceWidgetProps) {
                     {metric.trend === 'neutral' && <Minus className="w-3 h-3" />}
                     {metric.trendValue}
                   </div>
+                  )}
                 </div>
               </div>
             </motion.div>
@@ -253,36 +273,43 @@ export function PerformanceOverview({ accountId }: PerformanceWidgetProps) {
         const response = await authFetch(`/api/dashboard/stats?accountId=${accountId}`)
         if (response.ok) {
           const data = await response.json()
+          const hasSatisfactionRate = data.stats?.satisfactionRate != null && data.stats?.satisfactionRate >= 0
+          const monthlyTarget = data.stats?.monthlyRevenueTarget || 0
+          const occupancyTarget = data.stats?.occupancyTarget || 0
+
           setMetrics([
             {
               label: 'Meta Mensal',
               value: data.stats?.monthRevenue || 0,
-              target: data.stats?.monthlyRevenueTarget || 0,
+              target: monthlyTarget,
               unit: 'R$',
               trend: 'neutral',
               trendValue: '-',
               color: 'green',
-              icon: Target
+              icon: Target,
+              noTarget: monthlyTarget === 0
             },
             {
               label: 'Satisfação',
-              value: data.stats?.satisfactionRate ?? -1,
+              value: hasSatisfactionRate ? data.stats.satisfactionRate : 0,
               target: 100,
               unit: '%',
               trend: 'neutral',
               trendValue: '-',
               color: 'blue',
-              icon: Award
+              icon: Award,
+              unavailable: !hasSatisfactionRate
             },
             {
               label: 'Ocupação',
               value: data.stats?.occupancyRate || 0,
-              target: data.stats?.occupancyTarget || 0,
+              target: occupancyTarget,
               unit: '%',
               trend: 'neutral',
               trendValue: '-',
               color: 'purple',
-              icon: Clock
+              icon: Clock,
+              noTarget: occupancyTarget === 0
             }
           ])
         }
@@ -332,11 +359,21 @@ export function PerformanceOverview({ accountId }: PerformanceWidgetProps) {
               transition={{ delay: index * 0.1 }}
               className="flex flex-col items-center gap-2"
             >
+              {metric.unavailable ? (
+                <div className="relative w-24 h-24 flex items-center justify-center">
+                  <span className="text-lg font-bold text-muted-foreground">N/A</span>
+                </div>
+              ) : metric.noTarget ? (
+                <div className="relative w-24 h-24 flex items-center justify-center">
+                  <span className="text-sm font-medium text-muted-foreground">Não definida</span>
+                </div>
+              ) : (
               <CircularProgress
                 value={metric.value}
                 target={metric.target}
                 color={metric.color}
               />
+              )}
               <span className="text-xs text-muted-foreground text-center">{metric.label}</span>
             </motion.div>
           ))}

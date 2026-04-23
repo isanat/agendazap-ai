@@ -17,6 +17,7 @@ import {
 } from '@/components/ui/select'
 import { Checkbox } from '@/components/ui/checkbox'
 import { cn } from '@/lib/utils'
+import { toast } from 'sonner'
 import { ForgotPasswordDialog } from './forgot-password-dialog'
 
 interface AuthPageProps {
@@ -120,7 +121,7 @@ export function AuthPage({ onLogin }: AuthPageProps) {
       })
     } catch (error) {
       console.error('Login error:', error)
-      alert(error instanceof Error ? error.message : 'Erro ao fazer login')
+      toast.error(error instanceof Error ? error.message : 'Erro ao fazer login')
     } finally {
       setIsLoading(false)
     }
@@ -189,7 +190,7 @@ export function AuthPage({ onLogin }: AuthPageProps) {
       }
     } catch (error) {
       console.error('Registration error:', error)
-      alert(error instanceof Error ? error.message : 'Erro ao criar conta')
+      toast.error(error instanceof Error ? error.message : 'Erro ao criar conta')
     } finally {
       setIsLoading(false)
     }
@@ -344,7 +345,7 @@ export function AuthPage({ onLogin }: AuthPageProps) {
             ))}
           </div>
           <span className="text-sm text-white/80 font-medium">
-            © 2025 AgendaZap. Feito com ❤️ para seu negócio.
+            © {new Date().getFullYear()} AgendaZap. Feito com ❤️ para seu negócio.
           </span>
         </motion.div>
       </div>
@@ -447,6 +448,7 @@ export function AuthPage({ onLogin }: AuthPageProps) {
                           size="icon"
                           className="absolute right-1 top-1/2 -translate-y-1/2 h-9 w-9 hover:bg-muted/50 rounded-md transition-colors"
                           onClick={() => setShowLoginPassword(!showLoginPassword)}
+                          aria-label={showLoginPassword ? 'Ocultar senha' : 'Mostrar senha'}
                         >
                           {showLoginPassword ? (
                             <EyeOff className="w-5 h-5 text-muted-foreground" />
@@ -616,6 +618,7 @@ export function AuthPage({ onLogin }: AuthPageProps) {
                           size="icon"
                           className="absolute right-1 top-1/2 -translate-y-1/2 h-9 w-9 hover:bg-muted/50 rounded-md"
                           onClick={() => setShowRegisterPassword(!showRegisterPassword)}
+                          aria-label={showRegisterPassword ? 'Ocultar senha' : 'Mostrar senha'}
                         >
                           {showRegisterPassword ? (
                             <EyeOff className="w-5 h-5 text-muted-foreground" />
@@ -702,9 +705,9 @@ export function AuthPage({ onLogin }: AuthPageProps) {
                       />
                       <Label htmlFor="terms" className="text-sm leading-tight">
                         Li e aceito os{' '}
-                        <Button variant="link" className="px-0 h-auto text-green-600" onClick={() => alert('Termos de Uso estarão disponíveis em breve.')}>Termos de Uso</Button>
+                        <Button variant="link" className="px-0 h-auto text-green-600" onClick={() => toast.info('Termos de Uso estarão disponíveis em breve.')}>Termos de Uso</Button>
                         {' '}e{' '}
-                        <Button variant="link" className="px-0 h-auto text-green-600" onClick={() => alert('Política de Privacidade estará disponível em breve.')}>Política de Privacidade</Button>
+                        <Button variant="link" className="px-0 h-auto text-green-600" onClick={() => toast.info('Política de Privacidade estará disponível em breve.')}>Política de Privacidade</Button>
                       </Label>
                     </div>
 

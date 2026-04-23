@@ -25,6 +25,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { AlertCircle, CheckCircle, Cpu, Plus, RefreshCw, Settings, Trash2, Zap, Activity, DollarSign, BarChart3 } from 'lucide-react';
+import { authFetch, authGet } from '@/lib/auth-fetch';
 
 interface AIProvider {
   id: string;
@@ -152,7 +153,7 @@ export function AIProvidersManager() {
 
   async function fetchProviders() {
     try {
-      const res = await fetch('/api/admin/ai-providers?stats=true');
+      const res = await authGet('/api/admin/ai-providers?stats=true');
       const data = await res.json();
       setProviders(data.providers || []);
     } catch (error) {
@@ -164,7 +165,7 @@ export function AIProvidersManager() {
 
   async function fetchUsageStats() {
     try {
-      const res = await fetch('/api/admin/ai-usage');
+      const res = await authGet('/api/admin/ai-usage');
       const data = await res.json();
       setUsageStats(data);
     } catch (error) {
@@ -175,7 +176,7 @@ export function AIProvidersManager() {
   async function checkHealth() {
     setHealthChecking(true);
     try {
-      const res = await fetch('/api/admin/ai-health');
+      const res = await authGet('/api/admin/ai-health');
       const data = await res.json();
       if (data.success) {
         await fetchProviders();
@@ -189,10 +190,9 @@ export function AIProvidersManager() {
 
   async function toggleProvider(id: string, enabled: boolean) {
     try {
-      await fetch('/api/admin/ai-providers', {
+      await authFetch('/api/admin/ai-providers', {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id, isEnabled: enabled }),
+        body: { id, isEnabled: enabled },
       });
       await fetchProviders();
     } catch (error) {
@@ -204,7 +204,7 @@ export function AIProvidersManager() {
     if (!confirm('Tem certeza que deseja excluir este provider?')) return;
     
     try {
-      await fetch(`/api/admin/ai-providers?id=${id}`, { method: 'DELETE' });
+      await authFetch(`/api/admin/ai-providers?id=${id}`, { method: 'DELETE' });
       await fetchProviders();
     } catch (error) {
       console.error('Error deleting provider:', error);
@@ -221,16 +221,14 @@ export function AIProvidersManager() {
         if (!dataToSend.apiKey || dataToSend.apiKey.trim() === '') {
           delete (dataToSend as Record<string, unknown>).apiKey;
         }
-        await fetch('/api/admin/ai-providers', {
+        await authFetch('/api/admin/ai-providers', {
           method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(dataToSend),
+          body: dataToSend,
         });
       } else {
-        await fetch('/api/admin/ai-providers', {
+        await authFetch('/api/admin/ai-providers', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(formData),
+          body: formData,
         });
       }
       

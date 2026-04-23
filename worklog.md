@@ -112,6 +112,35 @@ Stage Summary:
 - TypeScript compilation and lint pass for all modified files
 
 ---
+Task ID: 3d
+Agent: Fix Appointments/Packages/Loyalty Issues
+Task: Fix critical issues in Appointments, Packages, and Loyalty pages
+
+Work Log:
+- Fixed Appointments PUT request: was only sending professionalId and notes; now includes clientId, serviceId, datetime, and status in the update body
+- Added serviceId and clientId fields to formData state, populated when editing an appointment
+- Fixed service lookup: now prefers formData.serviceId (by ID) over fragile name-based lookup
+- Fixed drag-and-drop handler: added `response.ok` check before calling fetchData() and showing success toast
+- Added error state to Packages page with retry UI shown when API fails
+- Added DialogDescription to both Package dialogs (Create/Edit and Details)
+- Fixed Loyalty crash when program is null: added null check before accessing data.program.name, shows default form values when no program exists
+- Replaced permanently disabled "Em breve" button in loyalty transactions with a subtle Badge instead
+- Added empty state for top clients list when no clients have points yet
+- Added empty state for transactions table when no transactions exist or filters match nothing
+- Verified all changes pass lint with 0 errors (2 pre-existing warnings in unrelated file)
+- Dev server compiles cleanly
+
+Stage Summary:
+- CRITICAL: Appointment edits now send all editable fields (service, client, date, time, status) instead of just professionalId and notes
+- CRITICAL: Loyalty page no longer crashes when no program exists in the database
+- Service lookup is now resilient - uses serviceId first, falls back to name match
+- Drag-and-drop reschedule now properly validates API response before confirming success
+- Packages page shows error state with retry button when API fails
+- Both Package dialogs have proper accessibility descriptions (DialogDescription)
+- Loyalty transaction actions show "Em breve" badge instead of confusing disabled button
+- Empty states added for top clients and transactions when no data exists
+
+---
 Task ID: 4
 Agent: Main Agent
 Task: Fix WhatsApp bot only responding to one number, fix hardcoded data, fix non-functional buttons across all pages
@@ -177,6 +206,38 @@ Fixes applied:
    - Add updateClientBirthDate() to save birth date to database
    - Birth date detection added to webhook message processing pipeline
 
+---
+Task ID: 3e
+Agent: Fix WhatsApp/Reports/NoShow Issues
+Task: Fix critical issues in WhatsApp, Reports, and NoShow pages
+
+Work Log:
+- Added `aiAutoReply Boolean @default(true)` to Account model in both prisma schemas
+- Pushed schema changes to Neon database successfully
+- Updated `/api/account/me` GET to include `aiAutoReply` in select fields
+- Fixed WhatsApp AI toggle: initializes from API response (account.aiAutoReply), persists via PATCH /api/account/me
+- Added `aiLoading` and `fetchError` states to WhatsApp page
+- Added error state UI with retry button when WhatsApp data fetch fails
+- Fixed onSuggestionAccept: schedule intent navigates to /?tab=appointments, cancel shows info toast
+- Fixed Reports charts: RevenueChart, NoShowTrendChart, ServiceDistributionChart now receive accountId prop
+- Promoted accountId to component-level state in reports-page.tsx so it's available for chart props
+- Changed PDF export option to "Texto" with .txt file extension and updated description
+- Removed fake PNG export option entirely from exportFormats
+- Removed unused FileImage import
+- Fixed NoShow CSV export: changed delimiter from comma to semicolon for pt-BR locale
+- Added UTF-8 BOM (\ufeff) to NoShow CSV blob for Excel compatibility
+- Added document.body.appendChild(link) and URL.revokeObjectURL(url) cleanup to NoShow export
+- All changes pass lint (0 errors, 2 pre-existing warnings in unrelated file)
+
+Stage Summary:
+- WhatsApp AI toggle now persists across sessions via account settings API
+- WhatsApp page shows proper error state with retry when data fetch fails
+- WhatsApp AI suggestion actions now navigate correctly (schedule → appointments, cancel → info)
+- Reports charts now load data for the correct account
+- Reports export no longer misleads with fake "PDF" label; "Texto" option generates proper .txt
+- PNG export removed (was a no-op fake toast)
+- NoShow CSV export uses semicolon delimiter (pt-BR compatible) with UTF-8 BOM and proper cleanup
+
 4. **Birth date schema** (prisma/schema.prisma):
    - Added birthDate DateTime? field to Client model
    - Added to ClientContext interface in ai-context-service.ts
@@ -203,3 +264,107 @@ Stage Summary:
 - Client service history and lastVisit are now properly updated
 - Birth date can be captured and stored for future proactive messaging
 - BusinessAnalyticsWidget no longer shows fake hardcoded values
+
+---
+Task ID: 3a
+Agent: Fix Critical Auth Issues
+Task: Fix critical authentication page issues
+
+Work Log:
+- Replaced `alert()` with `toast.error()` in auth-page.tsx for both login error (line 123) and registration error (line 192)
+- Added `import { toast } from 'sonner'` at the top of auth-page.tsx
+- Added `aria-label={showLoginPassword ? 'Ocultar senha' : 'Mostrar senha'}` to login password toggle button
+- Added `aria-label={showRegisterPassword ? 'Ocultar senha' : 'Mostrar senha'}` to register password toggle button
+- Changed hardcoded `© 2025 AgendaZap` to dynamic `© {new Date().getFullYear()} AgendaZap`
+- Replaced `alert('Termos de Uso...')` with `toast.info('Termos de Uso...')` for Terms button
+- Replaced `alert('Política de Privacidade...')` with `toast.info('Política de Privacidade...')` for Privacy button
+- Added server-side password strength validation in register API: min 8 chars, at least one uppercase, one lowercase, one number
+- Added server-side email format validation using regex in register API
+- Added `acceptTerms` server-side validation in register API route
+- Lint passes with 0 errors (2 pre-existing warnings in unrelated file)
+
+Stage Summary:
+- All `alert()` calls replaced with proper `toast` notifications (toast.error for errors, toast.info for informational)
+- Password toggle buttons now have proper aria-labels for accessibility
+- Copyright year is now dynamic instead of hardcoded 2025
+- Register API now validates password strength, email format, and acceptTerms server-side
+- All error messages in Portuguese for consistency with the app locale
+
+---
+Task ID: 3c
+Agent: Fix Critical Data Pages Issues
+Task: Fix critical issues in Services, Professionals, Clients pages
+
+Work Log:
+- Fixed double-fetch bug in all three pages (Services, Professionals, Clients) by changing `isInitialLoad` from `useState` to `useRef`, removing it from `useCallback` dependency arrays, and updating all references to use `.current`
+- Removed "Exportar Excel" option from Clients export dropdown (no xlsx library installed), kept only "Exportar CSV"
+- Added `sanitizeCsvValue` helper function to Clients page to prevent CSV injection (wraps values in quotes, escapes inner quotes, prefixes dangerous `=+-@` chars)
+- Removed fake 500ms delay (`await new Promise(resolve => setTimeout(resolve, 500))`) from Clients export handler
+- Added `isSaving` state to Clients page save button with `disabled={isSaving}` and Loader2 spinner
+- Added `isActive: formData.isActive` to Professionals POST (create) request body
+- Removed non-functional Grid/List view toggle from Services page (removed `viewMode` state, toggle buttons, and unused `Grid`/`List` icon imports)
+- All changes pass lint (0 errors, 2 pre-existing warnings in unrelated file)
+
+Stage Summary:
+- All 7 critical issues fixed across 3 page components
+- Double-fetch re-render cycle eliminated in Services, Professionals, Clients pages
+- CSV export is now injection-safe and no longer has fake delay
+- Clients save button has proper loading/disabled state
+- Professionals POST correctly sends isActive field
+- Services page no longer shows non-functional grid/list toggle
+
+---
+Task ID: 3f
+Agent: Fix Admin/SuperAdmin Critical Issues
+Task: Fix critical issues in Admin and SuperAdmin pages
+
+Work Log:
+- Replaced all 7 raw `fetch()` calls in ai-providers-manager.tsx with `authFetch`/`authGet` from `@/lib/auth-fetch`; added import at top
+- Fixed 3 feature flag Switch components in admin-settings-page.tsx with proper `onCheckedChange` handlers that update local state and call API via `authFetch`
+- Fixed 2 fee input fields (platformFeePercent, platformFeeFixed) in admin-settings-page.tsx with proper `onChange` handlers updating config state
+- Replaced hardcoded password '123456' in accounts-manager.tsx with `generateSecurePassword()` that creates a random 12-char password; toast now shows the generated password
+- Bound all 5 SMTP input fields (smtpHost, smtpPort, smtpUser, smtpPassword, emailFrom) in admin-settings-page.tsx to config state with proper `onChange` handlers
+- Extended `handleSave` in admin-settings-page.tsx to include all config fields (enableAiAssistant, enableMercadoPago, enableNfeGeneration, platformFeePercent, platformFeeFixed, smtpHost, smtpPort, smtpUser, smtpPassword, emailFrom)
+- Removed hardcoded appointment chart data (30/50/15/5% split) from superadmin-dashboard.tsx; now shows "N/A" when API doesn't provide status distribution
+- Fixed systemHealth default state from hardcoded 'healthy'/99.97%/145ms/0.02% to 'unknown'/0/0/0
+- Replaced hardcoded "Operacional" badge in superadmin-dashboard.tsx with dynamic badge using `systemHealth?.status` from API
+- Removed fabricated change percentages (5%, 12%, -3%, 8%) from metrics-page.tsx; replaced with 0 and 'stable' trend
+- Replaced hardcoded metrics ("23%", "4.8/5", "99.97%", "145ms", "0.02%") in metrics-page.tsx with "N/A" or API-derived values
+- Added SystemHealthData interface and systemHealth state to metrics-page.tsx; health indicators now use real API data
+- All changes pass lint (0 errors, 2 pre-existing warnings in unrelated file)
+
+Stage Summary:
+- CRITICAL: All SuperAdmin API calls now use authenticated fetch (was raw fetch, could fail with 401)
+- CRITICAL: Feature flag switches now actually save to backend (were no-op before)
+- CRITICAL: Fee inputs are now controlled and save properly
+- CRITICAL: Password reset no longer uses hardcoded '123456' (security vulnerability)
+- CRITICAL: handleSave now persists all settings, not just WhatsApp fields
+- All SMTP fields are now controlled inputs bound to state
+- SuperAdmin dashboard no longer shows fabricated appointment status data
+- Health status badge is now dynamic based on API response
+- Metrics page no longer shows fabricated percentages and hardcoded values
+
+---
+Task ID: 3b
+Agent: Fix Critical Dashboard Issues
+Task: Fix critical dashboard widget issues
+
+Work Log:
+- Verified that 12 mock widget files are NOT imported in page.tsx (only in ui-kit-page.tsx)
+- Deleted 12 mock widget files: ai-insights-widget, financial-health-widget, competitor-analysis-widget, social-media-widget, inventory-tracker-widget, marketing-campaign-widget, revenue-forecast-widget, revenue-breakdown-widget, client-retention-analytics, realtime-metrics-widget, ai-service-recommendations, promotional-codes-widget
+- Updated ui-kit-page.tsx to remove all imports and references to the 12 deleted mock widgets (removed 12 full-size widget cards and 12 mini widget cards, plus their imports)
+- Fixed NoShowAlerts "Cobrar Antecipado" button: added onClick={() => window.location.href = '/?tab=noshow'}
+- Fixed NoShowAlerts to use authFetch instead of bare fetch for /api/clients and /api/appointments calls
+- Fixed WhatsAppStatusWidget in page.tsx: added onConnect={() => window.location.href = '/?tab=whatsapp'} prop
+- Fixed RecentActivity "Ver Todas" button: added onClick={() => window.location.href = '/?tab=reports'}
+- Removed hardcoded AnnouncementBanner defaultAnnouncements (replaced with empty array [])
+- Fixed PerformanceWidget broken metrics: added unavailable/noTarget flags, "Satisfação" shows "N/A" when data unavailable, "Meta Mensal" and "Ocupação" show "Não definida" when target is 0, progress bars and trends hidden for unavailable/no-target metrics
+- Also fixed PerformanceOverview component with the same unavailable/noTarget handling for circular progress display
+- Lint passes cleanly (0 errors, only 2 pre-existing warnings in unrelated file)
+
+Stage Summary:
+- Removed 12 100%-fake-data widget files to prevent accidental deployment of mock data
+- All 5 non-functional buttons now navigate to correct pages (Cobrar Antecipado → noshow, Conectar → whatsapp, Ver Todas → reports)
+- NoShowAlerts now uses authFetch for authenticated API calls
+- AnnouncementBanner shows nothing when no real announcements exist (no more fake promos)
+- PerformanceWidget gracefully handles missing API fields (satisfactionRate, monthlyRevenueTarget, occupancyTarget)

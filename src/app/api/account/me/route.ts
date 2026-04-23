@@ -44,6 +44,7 @@ export async function GET(request: NextRequest) {
             confirmationMessage: true,
             reminderMessage: true,
             noShowMessage: true,
+            aiAutoReply: true,
             plan: true,
           }
         }

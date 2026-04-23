@@ -46,8 +46,8 @@ export function NoShowAlerts({ accountId }: NoShowAlertsProps) {
     try {
       // Fetch clients with high no-show scores and upcoming appointments
       const [clientsRes, appointmentsRes] = await Promise.all([
-        fetch(`/api/clients?accountId=${effectiveAccountId}`),
-        fetch(`/api/appointments?accountId=${effectiveAccountId}`)
+        authFetch(`/api/clients?accountId=${effectiveAccountId}`),
+        authFetch(`/api/appointments?accountId=${effectiveAccountId}`)
       ])
 
       if (!clientsRes.ok || !appointmentsRes.ok) {
@@ -199,7 +199,7 @@ export function NoShowAlerts({ accountId }: NoShowAlertsProps) {
                   <div className="text-sm text-muted-foreground">
                     Histórico: {alert.noShowCount} no-shows em {alert.totalAppointments} agendamentos
                   </div>
-                  <Button size="sm" variant="outline">
+                  <Button size="sm" variant="outline" onClick={() => window.location.href = '/?tab=noshow'}>
                     Cobrar Antecipado
                   </Button>
                 </div>

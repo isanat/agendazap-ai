@@ -36,6 +36,7 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogDescription,
   DialogFooter,
 } from '@/components/ui/dialog';
 import {
@@ -110,6 +111,7 @@ export function PackagesPage() {
   const [packages, setPackages] = useState<PackageData[]>([]);
   const [services, setServices] = useState<Service[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [detailsDialogOpen, setDetailsDialogOpen] = useState(false);
   const [selectedPackage, setSelectedPackage] = useState<PackageData | null>(null);
@@ -139,13 +141,17 @@ export function PackagesPage() {
 
   const fetchPackages = async () => {
     try {
+      setError(null);
       const response = await authFetch(`/api/packages?includeInactive=${includeInactive}`);
       if (response.ok) {
         const data = await response.json();
         setPackages(data);
+      } else {
+        setError('Erro ao carregar pacotes. Tente novamente.');
       }
     } catch (error) {
       console.error('Erro ao buscar pacotes:', error);
+      setError('Erro ao carregar pacotes. Verifique sua conexão.');
     } finally {
       setLoading(false);
     }
@@ -371,6 +377,21 @@ export function PackagesPage() {
             <Skeleton key={i} className="h-64" />
           ))}
         </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[400px] text-center">
+        <div className="p-4 rounded-full bg-emerald-500/10 mb-4">
+          <Package className="h-12 w-12 text-emerald-500" />
+        </div>
+        <h2 className="text-xl font-semibold mb-2">Erro ao carregar pacotes</h2>
+        <p className="text-muted-foreground mb-4">{error}</p>
+        <Button onClick={() => { setLoading(true); fetchPackages(); }} className="bg-gradient-to-r from-emerald-500 to-teal-500">
+          Tentar novamente
+        </Button>
       </div>
     );
   }
@@ -847,6 +868,9 @@ export function PackagesPage() {
                 <Package className="h-5 w-5 text-emerald-500" />
                 {editingPackage ? 'Editar Pacote' : 'Novo Pacote'}
               </DialogTitle>
+              <DialogDescription>
+                {editingPackage ? 'Altere os dados do pacote conforme necessário.' : 'Preencha os dados para criar um novo pacote de serviços.'}
+              </DialogDescription>
             </DialogHeader>
 
             <div className="grid gap-4 py-4">
@@ -1020,6 +1044,9 @@ export function PackagesPage() {
                 <Package className="h-5 w-5 text-emerald-500" />
                 {selectedPackage?.name}
               </DialogTitle>
+              <DialogDescription>
+                Detalhes completos do pacote de serviços.
+              </DialogDescription>
             </DialogHeader>
 
             {selectedPackage && (

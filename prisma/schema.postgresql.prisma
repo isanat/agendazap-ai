@@ -38,6 +38,7 @@ model Account {
   confirmationMessage    String?
   reminderMessage        String?
   noShowMessage          String?
+  aiAutoReply            Boolean              @default(true)
   plan                   String               @default("basic")
   planExpiresAt          DateTime?
   trialEndsAt            DateTime?
