@@ -1,14 +1,13 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Plus, Edit, Trash2, Phone, Mail, Calendar, Search, AlertTriangle, CheckCircle, Users, Shield, Info, Download, MessageSquare, Loader2, FileText, CheckCircle2 } from 'lucide-react'
+import { Plus, Edit, Trash2, Phone, Mail, Calendar, Search, AlertTriangle, CheckCircle, Users, Shield, Info, Download, MessageSquare, Loader2, FileText, CheckCircle2, Eye, CreditCard, Star, Cake, Hash } from 'lucide-react'
 import { authFetch } from '@/lib/auth-fetch'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
-import { Progress } from '@/components/ui/progress'
+import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import {
   Table,
   TableBody,
@@ -66,17 +65,84 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { toast } from 'sonner'
 import { getStoredAccountId } from '@/hooks/use-data'
 import { useAppStore } from '@/store/app-store'
+import { ClientDetailDrawer } from './client-detail-drawer'
 
 interface Client {
   id: string
   name: string
   phone: string
   email: string | null
+  cpf: string | null
+  birthDate: string | null
   totalAppointments: number
   noShowCount: number
   noShowScore: number
   lastVisit: string | null
   notes: string | null
+  paymentPreference: string | null
+  whatsappPushName: string | null
+  serviceHistory: any[] | null
+  aiNotes: string | null
+  loyaltyPoints: number
+  lastAiInteraction: string | null
+  createdAt: string
+}
+
+// Helper: mask CPF for privacy (***.***.**-XX)
+function maskCpf(cpf: string | null): string {
+  if (!cpf) return ''
+  const digits = cpf.replace(/\D/g, '')
+  if (digits.length !== 11) return cpf
+  return `***.***.**-${digits.slice(-2)}`
+}
+
+// Helper: format CPF for display (XXX.XXX.XXX-XX)
+function formatCpf(cpf: string | null): string {
+  if (!cpf) return ''
+  const digits = cpf.replace(/\D/g, '')
+  if (digits.length !== 11) return cpf
+  return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6, 9)}-${digits.slice(9, 11)}`
+}
+
+// Helper: format phone (XX) XXXXX-XXXX
+function formatPhone(phone: string): string {
+  const digits = phone.replace(/\D/g, '')
+  if (digits.length === 11) {
+    return `(${digits.slice(0, 2)}) ${digits.slice(2, 7)}-${digits.slice(7, 11)}`
+  }
+  if (digits.length === 10) {
+    return `(${digits.slice(0, 2)}) ${digits.slice(2, 6)}-${digits.slice(6, 10)}`
+  }
+  return phone
+}
+
+// Helper: format date to dd/MM/yyyy
+function formatDate(dateStr: string | null): string {
+  if (!dateStr) return ''
+  try {
+    const d = new Date(dateStr)
+    return d.toLocaleDateString('pt-BR')
+  } catch {
+    return dateStr
+  }
+}
+
+// Helper: payment preference badge config
+function getPaymentBadge(pref: string | null): { label: string; variant: 'default' | 'secondary' | 'outline' | 'destructive'; className: string } {
+  switch (pref) {
+    case 'PIX':
+      return { label: 'PIX', variant: 'secondary', className: 'bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-400 border-teal-200 dark:border-teal-800' }
+    case 'Cartão de Crédito/Débito':
+      return { label: 'Cartão', variant: 'secondary', className: 'bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400 border-violet-200 dark:border-violet-800' }
+    case 'Cartão de Débito':
+      return { label: 'Débito', variant: 'secondary', className: 'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-400 border-sky-200 dark:border-sky-800' }
+    case 'Dinheiro':
+      return { label: 'Dinheiro', variant: 'secondary', className: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 border-amber-200 dark:border-amber-800' }
+    case 'Presencialmente':
+      return { label: 'Presencial', variant: 'secondary', className: 'bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400 border-rose-200 dark:border-rose-800' }
+    default:
+      return { label: pref || '', variant: 'outline', className: '' }
+  }
 }
 
 export function ClientsPage() {
@@ -99,8 +165,15 @@ export function ClientsPage() {
     name: '',
     phone: '',
     email: '',
+    cpf: '',
+    birthDate: '',
+    paymentPreference: '',
     notes: ''
   })
+
+  // Detail drawer state
+  const [detailClient, setDetailClient] = useState<Client | null>(null)
+  const [isDetailOpen, setIsDetailOpen] = useState(false)
 
   // Get accountId from localStorage
   const [accountId, setAccountId] = useState<string | null>(null)
@@ -136,11 +209,20 @@ export function ClientsPage() {
         name: client.name,
         phone: client.phone,
         email: client.email,
+        cpf: client.cpf,
+        birthDate: client.birthDate,
         totalAppointments: client.totalAppointments || 0,
         noShowCount: client.noShowCount || 0,
         noShowScore: client.noShowScore || 50,
         lastVisit: client.lastVisit,
-        notes: client.notes
+        notes: client.notes,
+        paymentPreference: client.paymentPreference,
+        whatsappPushName: client.whatsappPushName,
+        serviceHistory: client.serviceHistory,
+        aiNotes: client.aiNotes,
+        loyaltyPoints: client.loyaltyPoints || 0,
+        lastAiInteraction: client.lastAiInteraction,
+        createdAt: client.createdAt
       }))
       setClients(transformedClients)
       isInitialLoad.current = false
@@ -160,7 +242,8 @@ export function ClientsPage() {
   const filteredClients = clients.filter(client => {
     const matchesSearch = client.name.toLowerCase().includes(search.toLowerCase()) ||
       client.phone.includes(search) ||
-      (client.email?.toLowerCase().includes(search.toLowerCase()) ?? false)
+      (client.email?.toLowerCase().includes(search.toLowerCase()) ?? false) ||
+      (client.cpf?.replace(/\D/g, '').includes(search.replace(/\D/g, '')) ?? false)
     
     const matchesRisk = riskFilter === 'all' ||
       (riskFilter === 'low' && client.noShowScore < 30) ||
@@ -207,16 +290,28 @@ export function ClientsPage() {
       ? clients.filter(c => selectedClients.includes(c.id))
       : filteredClients
     
-    // Generate CSV content
-    const headers = ['Nome', 'Telefone', 'Email', 'Agendamentos', 'No-Shows', 'Score Risco', 'Última Visita']
+    // Generate CSV content with all fields
+    const headers = [
+      'Nome', 'Telefone', 'Email', 'CPF', 'Data de Nascimento',
+      'Preferência de Pagamento', 'Pontos Fidelidade',
+      'Agendamentos', 'No-Shows', 'Score Risco',
+      'Última Visita', 'Nome WhatsApp', 'Observações', 'Notas IA'
+    ]
     const rows = clientsToExport.map(c => [
       c.name,
-      c.phone,
+      formatPhone(c.phone),
       c.email || '',
+      formatCpf(c.cpf),
+      formatDate(c.birthDate),
+      c.paymentPreference || '',
+      c.loyaltyPoints.toString(),
       c.totalAppointments.toString(),
       c.noShowCount.toString(),
       `${c.noShowScore}%`,
-      c.lastVisit ? new Date(c.lastVisit).toLocaleDateString('pt-BR') : 'Nunca'
+      c.lastVisit ? formatDate(c.lastVisit) : 'Nunca',
+      c.whatsappPushName || '',
+      c.notes || '',
+      c.aiNotes || ''
     ])
     
     const csv = [headers, ...rows].map(row => row.map(sanitizeCsvValue).join(',')).join('\n')
@@ -265,6 +360,9 @@ export function ClientsPage() {
         name: client.name,
         phone: client.phone,
         email: client.email || '',
+        cpf: client.cpf || '',
+        birthDate: client.birthDate ? new Date(client.birthDate).toISOString().split('T')[0] : '',
+        paymentPreference: client.paymentPreference || '',
         notes: client.notes || ''
       })
     } else {
@@ -273,10 +371,18 @@ export function ClientsPage() {
         name: '',
         phone: '',
         email: '',
+        cpf: '',
+        birthDate: '',
+        paymentPreference: '',
         notes: ''
       })
     }
     setIsDialogOpen(true)
+  }, [])
+
+  const handleOpenDetail = useCallback((client: Client) => {
+    setDetailClient(client)
+    setIsDetailOpen(true)
   }, [])
 
   // Register callback with store
@@ -304,6 +410,10 @@ export function ClientsPage() {
             name: formData.name,
             phone: formData.phone,
             email: formData.email,
+            cpf: formData.cpf,
+            birthDate: formData.birthDate || null,
+            paymentPreference: formData.paymentPreference,
+            loyaltyPoints: editingClient.loyaltyPoints,
             notes: formData.notes
           })
         })
@@ -326,6 +436,8 @@ export function ClientsPage() {
             name: formData.name,
             phone: formData.phone,
             email: formData.email,
+            cpf: formData.cpf,
+            birthDate: formData.birthDate || null,
             notes: formData.notes
           })
         })
@@ -498,7 +610,7 @@ export function ClientsPage() {
                 Novo
               </Button>
             </DialogTrigger>
-            <DialogContent className="sm:max-w-[425px]">
+            <DialogContent className="sm:max-w-[500px] max-h-[90vh] overflow-y-auto">
               <DialogHeader>
                 <DialogTitle>
                   {editingClient ? 'Editar Cliente' : 'Novo Cliente'}
@@ -509,7 +621,7 @@ export function ClientsPage() {
               </DialogHeader>
               <div className="grid gap-4 py-4">
                 <div className="grid gap-2">
-                  <Label htmlFor="name">Nome</Label>
+                  <Label htmlFor="name">Nome *</Label>
                   <Input
                     id="name"
                     value={formData.name}
@@ -519,7 +631,7 @@ export function ClientsPage() {
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="grid gap-2">
-                    <Label htmlFor="phone">Telefone</Label>
+                    <Label htmlFor="phone">Telefone *</Label>
                     <Input
                       id="phone"
                       value={formData.phone}
@@ -537,6 +649,45 @@ export function ClientsPage() {
                       placeholder="email@exemplo.com"
                     />
                   </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="grid gap-2">
+                    <Label htmlFor="cpf">CPF</Label>
+                    <Input
+                      id="cpf"
+                      value={formData.cpf}
+                      onChange={(e) => setFormData({ ...formData, cpf: e.target.value })}
+                      placeholder="000.000.000-00"
+                    />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="birthDate">Data de Nascimento</Label>
+                    <Input
+                      id="birthDate"
+                      type="date"
+                      value={formData.birthDate}
+                      onChange={(e) => setFormData({ ...formData, birthDate: e.target.value })}
+                    />
+                  </div>
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="paymentPreference">Preferência de Pagamento</Label>
+                  <Select 
+                    value={formData.paymentPreference} 
+                    onValueChange={(value) => setFormData({ ...formData, paymentPreference: value === '_none' ? '' : value })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Selecione a preferência" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="_none">Nenhuma</SelectItem>
+                      <SelectItem value="PIX">PIX</SelectItem>
+                      <SelectItem value="Cartão de Crédito/Débito">Cartão de Crédito/Débito</SelectItem>
+                      <SelectItem value="Cartão de Débito">Cartão de Débito</SelectItem>
+                      <SelectItem value="Dinheiro">Dinheiro</SelectItem>
+                      <SelectItem value="Presencialmente">Presencialmente</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div className="grid gap-2">
                   <Label htmlFor="notes">Observações</Label>
@@ -626,7 +777,7 @@ export function ClientsPage() {
       </div>
 
       {/* Risk Legend */}
-      <div className="flex items-center gap-4 p-3 rounded-lg bg-muted/30">
+      <div className="flex items-center gap-4 p-3 rounded-lg bg-muted/30 flex-wrap">
         <Info className="w-4 h-4 text-muted-foreground" />
         <span className="text-sm text-muted-foreground">Legenda de Risco:</span>
         <div className="flex items-center gap-1">
@@ -706,198 +857,252 @@ export function ClientsPage() {
               </Button>
             </div>
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow className="bg-muted/30">
-                  <TableHead className="w-10">
-                    <UICheckbox
-                      checked={selectedClients.length === filteredClients.length && filteredClients.length > 0}
-                      onCheckedChange={handleSelectAll}
-                    />
-                  </TableHead>
-                  <TableHead className="font-semibold">Cliente</TableHead>
-                  <TableHead className="font-semibold">Contato</TableHead>
-                  <TableHead className="text-center font-semibold">Agendamentos</TableHead>
-                  <TableHead className="text-center font-semibold">No-Shows</TableHead>
-                  <TableHead className="font-semibold">Risco No-Show</TableHead>
-                  <TableHead className="font-semibold">Última Visita</TableHead>
-                  <TableHead className="text-right font-semibold w-32">Ações</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filteredClients.map((client, index) => (
-                  <motion.tr
-                    key={client.id}
-                    initial={{ opacity: 0, x: -10 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    transition={{ delay: index * 0.03 }}
-                    className={cn(
-                      "group",
-                      selectedClients.includes(client.id) && "bg-green-50 dark:bg-green-900/10"
-                    )}
-                  >
-                    <TableCell>
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow className="bg-muted/30">
+                    <TableHead className="w-10">
                       <UICheckbox
-                        checked={selectedClients.includes(client.id)}
-                        onCheckedChange={(checked) => handleSelectClient(client.id, checked as boolean)}
+                        checked={selectedClients.length === filteredClients.length && filteredClients.length > 0}
+                        onCheckedChange={handleSelectAll}
                       />
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-3">
-                        <Avatar className="w-9 h-9 ring-2 ring-background shadow-sm">
-                          <AvatarFallback className={cn(
-                            "font-medium",
-                            client.noShowScore >= 70 ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400" :
-                            client.noShowScore >= 30 ? "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400" :
-                            "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
-                          )}>
-                            {client.name.split(' ').map(n => n[0]).join('').slice(0, 2)}
-                          </AvatarFallback>
-                        </Avatar>
-                        <div className="min-w-0">
-                          <p className="font-medium">{client.name}</p>
-                          {client.notes && (
+                    </TableHead>
+                    <TableHead className="font-semibold">Cliente</TableHead>
+                    <TableHead className="font-semibold hidden md:table-cell">CPF</TableHead>
+                    <TableHead className="font-semibold hidden lg:table-cell">Nascimento</TableHead>
+                    <TableHead className="font-semibold hidden md:table-cell">Pagamento</TableHead>
+                    <TableHead className="text-center font-semibold hidden sm:table-cell">Agendamentos</TableHead>
+                    <TableHead className="font-semibold">Risco No-Show</TableHead>
+                    <TableHead className="text-center font-semibold hidden lg:table-cell">
+                      <Star className="w-3.5 h-3.5 inline" />
+                    </TableHead>
+                    <TableHead className="font-semibold hidden xl:table-cell">Última Visita</TableHead>
+                    <TableHead className="text-right font-semibold w-36">Ações</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {filteredClients.map((client, index) => {
+                    const paymentBadge = getPaymentBadge(client.paymentPreference)
+                    return (
+                      <motion.tr
+                        key={client.id}
+                        initial={{ opacity: 0, x: -10 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        transition={{ delay: index * 0.03 }}
+                        className={cn(
+                          "group cursor-pointer",
+                          selectedClients.includes(client.id) && "bg-green-50 dark:bg-green-900/10"
+                        )}
+                        onClick={() => handleOpenDetail(client)}
+                      >
+                        <TableCell onClick={(e) => e.stopPropagation()}>
+                          <UICheckbox
+                            checked={selectedClients.includes(client.id)}
+                            onCheckedChange={(checked) => handleSelectClient(client.id, checked as boolean)}
+                          />
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-3">
+                            <Avatar className="w-9 h-9 ring-2 ring-background shadow-sm">
+                              <AvatarFallback className={cn(
+                                "font-medium",
+                                client.noShowScore >= 70 ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400" :
+                                client.noShowScore >= 30 ? "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400" :
+                                "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
+                              )}>
+                                {client.name.split(' ').map(n => n[0]).join('').slice(0, 2)}
+                              </AvatarFallback>
+                            </Avatar>
+                            <div className="min-w-0">
+                              <p className="font-medium truncate max-w-44">{client.name}</p>
+                              <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                                <Phone className="w-3 h-3 flex-shrink-0" />
+                                <span className="truncate">{formatPhone(client.phone)}</span>
+                              </div>
+                              {client.email && (
+                                <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                                  <Mail className="w-3 h-3 flex-shrink-0" />
+                                  <span className="truncate max-w-36">{client.email}</span>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </TableCell>
+                        <TableCell className="hidden md:table-cell">
+                          {client.cpf ? (
                             <TooltipProvider>
                               <Tooltip>
                                 <TooltipTrigger asChild>
-                                  <p className="text-xs text-muted-foreground truncate max-w-36 cursor-help">
-                                    {client.notes}
-                                  </p>
+                                  <span className="text-sm font-mono cursor-help">
+                                    {maskCpf(client.cpf)}
+                                  </span>
                                 </TooltipTrigger>
                                 <TooltipContent>
-                                  <p>{client.notes}</p>
+                                  <p>CPF completo: {formatCpf(client.cpf)}</p>
                                 </TooltipContent>
                               </Tooltip>
                             </TooltipProvider>
+                          ) : (
+                            <span className="text-sm text-muted-foreground">—</span>
                           )}
-                        </div>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-1.5 text-sm">
-                          <Phone className="w-3.5 h-3.5 text-muted-foreground" />
-                          <span>{client.phone}</span>
-                        </div>
-                        {client.email && (
-                          <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
-                            <Mail className="w-3.5 h-3.5" />
-                            <span className="truncate max-w-36">{client.email}</span>
-                          </div>
-                        )}
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-center">
-                      <Badge variant="secondary" className="font-medium">
-                        {client.totalAppointments}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-center">
-                      <Badge 
-                        variant={client.noShowCount > 0 ? 'destructive' : 'outline'}
-                        className={cn(
-                          "font-medium",
-                          client.noShowCount === 0 && "text-green-600 border-green-600"
-                        )}
-                      >
-                        {client.noShowCount}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      <TooltipProvider>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <div className="flex items-center gap-2 cursor-help">
-                              <div className="relative w-20 h-2.5 rounded-full bg-muted overflow-hidden">
-                                <div 
-                                  className={cn("absolute inset-y-0 left-0 rounded-full transition-all", getNoShowBg(client.noShowScore))}
-                                  style={{ width: `${client.noShowScore}%` }}
-                                />
-                              </div>
-                              <span className={cn('text-sm font-medium tabular-nums', getNoShowColor(client.noShowScore))}>
-                                {client.noShowScore}%
-                              </span>
-                              {client.noShowScore >= 70 && (
-                                <Shield className="w-4 h-4 text-red-500" />
-                              )}
+                        </TableCell>
+                        <TableCell className="hidden lg:table-cell">
+                          {client.birthDate ? (
+                            <div className="flex items-center gap-1.5 text-sm">
+                              <Cake className="w-3.5 h-3.5 text-muted-foreground" />
+                              <span>{formatDate(client.birthDate)}</span>
                             </div>
-                          </TooltipTrigger>
-                          <TooltipContent>
-                            <p>Score calculado com base em histórico de no-shows</p>
-                          </TooltipContent>
-                        </Tooltip>
-                      </TooltipProvider>
-                    </TableCell>
-                    <TableCell>
-                      {client.lastVisit ? (
-                        <span className="text-sm">
-                          {new Date(client.lastVisit).toLocaleDateString('pt-BR')}
-                        </span>
-                      ) : (
-                        <span className="text-sm text-muted-foreground italic">Nunca</span>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex justify-end gap-1">
-                        <TooltipProvider>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-8 w-8 text-green-600 hover:text-green-700 hover:bg-green-100 dark:hover:bg-green-900/30"
-                                onClick={() => handleWhatsAppMessage(client.phone)}
-                              >
-                                <MessageSquare className="w-4 h-4" />
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent>
-                              <p>Enviar WhatsApp</p>
-                            </TooltipContent>
-                          </Tooltip>
-                        </TooltipProvider>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8 opacity-0 group-hover:opacity-100 transition-opacity"
-                          onClick={() => handleOpenDialog(client)}
-                        >
-                          <Edit className="w-4 h-4" />
-                        </Button>
-                        <AlertDialog>
-                          <AlertDialogTrigger asChild>
-                            <Button 
-                              variant="ghost" 
-                              size="icon" 
-                              className="h-8 w-8 text-red-600 opacity-0 group-hover:opacity-100 transition-opacity"
+                          ) : (
+                            <span className="text-sm text-muted-foreground">—</span>
+                          )}
+                        </TableCell>
+                        <TableCell className="hidden md:table-cell">
+                          {client.paymentPreference ? (
+                            <Badge variant={paymentBadge.variant} className={cn('text-xs', paymentBadge.className)}>
+                              {paymentBadge.label}
+                            </Badge>
+                          ) : (
+                            <span className="text-sm text-muted-foreground">—</span>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-center hidden sm:table-cell">
+                          <Badge variant="secondary" className="font-medium">
+                            {client.totalAppointments}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          <TooltipProvider>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <div className="flex items-center gap-2 cursor-help">
+                                  <div className="relative w-16 h-2.5 rounded-full bg-muted overflow-hidden">
+                                    <div 
+                                      className={cn("absolute inset-y-0 left-0 rounded-full transition-all", getNoShowBg(client.noShowScore))}
+                                      style={{ width: `${client.noShowScore}%` }}
+                                    />
+                                  </div>
+                                  <span className={cn('text-sm font-medium tabular-nums', getNoShowColor(client.noShowScore))}>
+                                    {client.noShowScore}%
+                                  </span>
+                                  {client.noShowScore >= 70 && (
+                                    <Shield className="w-4 h-4 text-red-500" />
+                                  )}
+                                </div>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                <p>{client.noShowCount} no-shows em {client.totalAppointments} agendamentos</p>
+                              </TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+                        </TableCell>
+                        <TableCell className="text-center hidden lg:table-cell">
+                          {client.loyaltyPoints > 0 ? (
+                            <TooltipProvider>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <div className="flex items-center justify-center gap-1">
+                                    <Star className="w-3.5 h-3.5 text-amber-500 fill-amber-500" />
+                                    <span className="text-sm font-medium text-amber-600">{client.loyaltyPoints}</span>
+                                  </div>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p>Pontos de fidelidade</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            </TooltipProvider>
+                          ) : (
+                            <span className="text-sm text-muted-foreground">0</span>
+                          )}
+                        </TableCell>
+                        <TableCell className="hidden xl:table-cell">
+                          {client.lastVisit ? (
+                            <span className="text-sm">
+                              {formatDate(client.lastVisit)}
+                            </span>
+                          ) : (
+                            <span className="text-sm text-muted-foreground italic">Nunca</span>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
+                          <div className="flex justify-end gap-1">
+                            <TooltipProvider>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-8 w-8"
+                                    onClick={() => handleOpenDetail(client)}
+                                  >
+                                    <Eye className="w-4 h-4" />
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p>Ver detalhes</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            </TooltipProvider>
+                            <TooltipProvider>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-8 w-8 text-green-600 hover:text-green-700 hover:bg-green-100 dark:hover:bg-green-900/30"
+                                    onClick={() => handleWhatsAppMessage(client.phone)}
+                                  >
+                                    <MessageSquare className="w-4 h-4" />
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p>Enviar WhatsApp</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            </TooltipProvider>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8 opacity-0 group-hover:opacity-100 transition-opacity"
+                              onClick={() => handleOpenDialog(client)}
                             >
-                              <Trash2 className="w-4 h-4" />
+                              <Edit className="w-4 h-4" />
                             </Button>
-                          </AlertDialogTrigger>
-                          <AlertDialogContent>
-                            <AlertDialogHeader>
-                              <AlertDialogTitle>Excluir cliente?</AlertDialogTitle>
-                              <AlertDialogDescription>
-                                Esta ação não pode ser desfeita. O cliente "{client.name}" será permanentemente removido.
-                              </AlertDialogDescription>
-                            </AlertDialogHeader>
-                            <AlertDialogFooter>
-                              <AlertDialogCancel>Cancelar</AlertDialogCancel>
-                              <AlertDialogAction
-                                className="bg-red-600 hover:bg-red-700"
-                                onClick={() => handleDelete(client.id)}
-                              >
-                                Excluir
-                              </AlertDialogAction>
-                            </AlertDialogFooter>
-                          </AlertDialogContent>
-                        </AlertDialog>
-                      </div>
-                    </TableCell>
-                  </motion.tr>
-                ))}
-              </TableBody>
-            </Table>
+                            <AlertDialog>
+                              <AlertDialogTrigger asChild>
+                                <Button 
+                                  variant="ghost" 
+                                  size="icon" 
+                                  className="h-8 w-8 text-red-600 opacity-0 group-hover:opacity-100 transition-opacity"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </Button>
+                              </AlertDialogTrigger>
+                              <AlertDialogContent>
+                                <AlertDialogHeader>
+                                  <AlertDialogTitle>Excluir cliente?</AlertDialogTitle>
+                                  <AlertDialogDescription>
+                                    Esta ação não pode ser desfeita. O cliente &quot;{client.name}&quot; será permanentemente removido.
+                                  </AlertDialogDescription>
+                                </AlertDialogHeader>
+                                <AlertDialogFooter>
+                                  <AlertDialogCancel>Cancelar</AlertDialogCancel>
+                                  <AlertDialogAction
+                                    className="bg-red-600 hover:bg-red-700"
+                                    onClick={() => handleDelete(client.id)}
+                                  >
+                                    Excluir
+                                  </AlertDialogAction>
+                                </AlertDialogFooter>
+                              </AlertDialogContent>
+                            </AlertDialog>
+                          </div>
+                        </TableCell>
+                      </motion.tr>
+                    )
+                  })}
+                </TableBody>
+              </Table>
+            </div>
           )}
         </CardContent>
       </Card>
@@ -940,6 +1145,24 @@ export function ClientsPage() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Client Detail Drawer */}
+      <ClientDetailDrawer
+        open={isDetailOpen}
+        onOpenChange={setIsDetailOpen}
+        client={detailClient}
+        onEdit={() => {
+          if (detailClient) {
+            setIsDetailOpen(false)
+            setTimeout(() => handleOpenDialog(detailClient), 200)
+          }
+        }}
+        onWhatsApp={() => {
+          if (detailClient) {
+            handleWhatsAppMessage(detailClient.phone)
+          }
+        }}
+      />
     </div>
   )
 }
