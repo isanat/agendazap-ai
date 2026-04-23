@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { usePathname } from 'next/navigation'
+import { usePathname, useSearchParams } from 'next/navigation'
 import { cn } from '@/lib/utils'
 import {
   LayoutDashboard,
@@ -59,10 +59,9 @@ export function AppSidebar() {
   // Check if user is superadmin (can access system admin panel)
   const isSuperAdmin = user?.role === 'superadmin'
   
-  // Get current tab from URL
-  const currentTab = typeof window !== 'undefined' 
-    ? new URLSearchParams(window.location.search).get('tab') || 'dashboard'
-    : 'dashboard'
+  // Get current tab from URL (reactive via useSearchParams)
+  const searchParams = useSearchParams()
+  const currentTab = searchParams.get('tab') || 'dashboard'
 
   return (
     <aside
@@ -102,6 +101,7 @@ export function AppSidebar() {
               <li key={item.label}>
                 <Link
                   href={item.href}
+                  scroll={false}
                   className={cn(
                     'relative flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-200',
                     'hover:bg-accent hover:text-accent-foreground',
@@ -158,6 +158,7 @@ export function AppSidebar() {
               {isSuperAdmin && (
                 <Link
                   href="/?tab=admin"
+                  scroll={false}
                   className="flex items-center gap-2 w-full px-3 py-2 text-sm rounded-lg bg-purple-500/10 text-purple-600 dark:text-purple-400 hover:bg-purple-500/20 transition-colors"
                 >
                   <Shield className="w-4 h-4" />
@@ -181,6 +182,7 @@ export function AppSidebar() {
             {isSuperAdmin && (
               <Link
                 href="/?tab=admin"
+                scroll={false}
                 className="flex items-center justify-center w-full p-2 rounded-lg bg-purple-500/10 text-purple-600 hover:bg-purple-500/20"
               >
                 <Shield className="w-5 h-5" />

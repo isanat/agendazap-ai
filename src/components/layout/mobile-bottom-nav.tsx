@@ -35,6 +35,7 @@ export function MobileBottomNav() {
             <Link
               key={item.label}
               href={href}
+              scroll={false}
               className={cn(
                 'relative flex flex-col items-center justify-center gap-1 py-2 px-3 rounded-xl transition-all min-w-[60px]',
                 isActive 

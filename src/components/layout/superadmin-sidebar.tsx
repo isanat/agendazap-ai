@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { usePathname } from 'next/navigation'
+import { usePathname, useSearchParams } from 'next/navigation'
 import { cn } from '@/lib/utils'
 import {
   LayoutDashboard,
@@ -122,10 +122,9 @@ export function SuperAdminSidebar() {
   const { sidebarOpen, toggleSidebar, user, logout } = useAppStore()
   const [showLogoutDialog, setShowLogoutDialog] = useState(false)
   
-  // Get current tab from URL
-  const currentTab = typeof window !== 'undefined' 
-    ? new URLSearchParams(window.location.search).get('tab') || 'dashboard'
-    : 'dashboard'
+  // Get current tab from URL (reactive via useSearchParams)
+  const searchParams = useSearchParams()
+  const currentTab = searchParams.get('tab') || 'dashboard'
 
   return (
     <aside
@@ -176,6 +175,7 @@ export function SuperAdminSidebar() {
               <li key={item.label}>
                 <Link
                   href={item.href}
+                  scroll={false}
                   className={cn(
                     'relative flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-200',
                     'hover:bg-slate-700/50',
