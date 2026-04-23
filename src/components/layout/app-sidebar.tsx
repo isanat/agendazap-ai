@@ -18,7 +18,8 @@ import {
   Shield,
   AlertCircle,
   Package,
-  Star
+  Star,
+  Puzzle
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useAppStore } from '@/store/app-store'
@@ -47,6 +48,7 @@ const menuItems = [
   { icon: BarChart3, label: 'Relatórios', href: '/?tab=reports', tab: 'reports' },
   { icon: CreditCard, label: 'No-Show', href: '/?tab=noshow', tab: 'noshow' },
   { icon: Settings, label: 'Configurações', href: '/?tab=settings', tab: 'settings' },
+  { icon: Puzzle, label: 'UI Kit', href: '/?tab=ui-kit', tab: 'ui-kit' },
 ]
 
 export function AppSidebar() {

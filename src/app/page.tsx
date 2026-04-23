@@ -16,37 +16,9 @@ import { RecentActivity } from '@/components/dashboard/recent-activity'
 import { TipOfTheDay } from '@/components/dashboard/tip-of-the-day'
 import { BusinessAnalyticsWidget } from '@/components/dashboard/business-analytics-widget'
 import { QuickStatsWidget } from '@/components/dashboard/quick-stats-widget'
-import { RealtimeActivityFeed, MiniActivityFeed } from '@/components/dashboard/realtime-activity-feed'
-import { AIInsightsWidget, AIInsightsMini } from '@/components/dashboard/ai-insights-widget'
-import { GoalsProgressWidget, GoalsProgressMini } from '@/components/dashboard/goals-progress-widget'
-import { AnnouncementBanner, QuickStatusBanner, StatusBanner } from '@/components/dashboard/announcement-banner'
-import { StatsComparisonWidget, MiniComparison } from '@/components/dashboard/stats-comparison-widget'
-import { ClientJourneyTimeline, ClientJourneyMini } from '@/components/dashboard/client-journey-timeline'
-import { ServicePopularityWidget, ServicePopularityMini } from '@/components/dashboard/service-popularity-widget'
-import { TeamPerformanceWidget, TeamPerformanceMini } from '@/components/dashboard/team-performance-widget'
-import { NotificationPreferencesWidget, NotificationPreferencesMini } from '@/components/dashboard/notification-preferences-widget'
-import { AppointmentConflictsWidget, AppointmentConflictsMini } from '@/components/dashboard/appointment-conflicts-widget'
-import { RevenueForecastWidget, RevenueForecastMini } from '@/components/dashboard/revenue-forecast-widget'
-import { WeeklyScheduleOverview, WeeklyScheduleMini } from '@/components/dashboard/weekly-schedule-overview'
-import { ClientRetentionAnalytics, ClientRetentionMini } from '@/components/dashboard/client-retention-analytics'
-import { QuickReportsGenerator, QuickReportsMini } from '@/components/dashboard/quick-reports-generator'
-import { SmartSuggestionsWidget, SmartSuggestionsMini } from '@/components/dashboard/smart-suggestions-widget'
-import { ClientBirthdayTracker, ClientBirthdayMini } from '@/components/dashboard/client-birthday-tracker'
-import { MarketingCampaignWidget, MarketingCampaignMini } from '@/components/dashboard/marketing-campaign-widget'
-import { AIServiceRecommendations, AIServiceRecommendationsMini } from '@/components/dashboard/ai-service-recommendations'
-import { InventoryTrackerWidget, InventoryTrackerMini } from '@/components/dashboard/inventory-tracker-widget'
-import { StaffScheduleWidget, StaffScheduleMini } from '@/components/dashboard/staff-schedule-widget'
-import { FinancialHealthWidget, FinancialHealthMini } from '@/components/dashboard/financial-health-widget'
-import { CustomerFeedbackWidget, CustomerFeedbackMini } from '@/components/dashboard/customer-feedback-widget'
-import { LoyaltyProgramWidget, LoyaltyProgramMini } from '@/components/dashboard/loyalty-program-widget'
-import { CompetitorAnalysisWidget, CompetitorAnalysisMini } from '@/components/dashboard/competitor-analysis-widget'
-import { WaitlistManagementWidget, WaitlistManagementMini } from '@/components/dashboard/waitlist-management-widget'
-import { PromotionalCodesWidget, PromotionalCodesMini } from '@/components/dashboard/promotional-codes-widget'
-import { RevenueBreakdownWidget, RevenueBreakdownMini } from '@/components/dashboard/revenue-breakdown-widget'
-import { SocialMediaWidget, SocialMediaMini } from '@/components/dashboard/social-media-widget'
-import { AppointmentRemindersWidget, AppointmentRemindersMini } from '@/components/dashboard/appointment-reminders-widget'
-import { PerformanceMetricsWidget, PerformanceMetricsMini } from '@/components/dashboard/performance-metrics-widget'
-import { RealtimeMetricsWidget, RealtimeMetricsMini } from '@/components/dashboard/realtime-metrics-widget'
+import { AnnouncementBanner } from '@/components/dashboard/announcement-banner'
+import { WhatsAppStatusWidget } from '@/components/dashboard/whatsapp-status-widget'
+import { UiKitPage } from '@/components/dashboard/ui-kit-page'
 import { PWAInstallPrompt, OfflineIndicator, UpdatePrompt, NotificationPermissionPrompt } from '@/components/pwa/pwa-components'
 import { KeyboardShortcutsHelp, useKeyboardShortcuts } from '@/components/keyboard-shortcuts-help'
 import { PeriodFilter } from '@/components/dashboard/period-filter'
@@ -149,173 +121,45 @@ function DashboardContent({ accountId }: { accountId?: string | null }) {
         </div>
       </motion.div>
 
-      {/* AI Insights & Goals Row */}
-      <motion.div 
+      {/* Charts Row - REAL DATA */}
+      <motion.div
         className="grid gap-6 lg:grid-cols-3"
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.45 }}
-      >
-        <AIInsightsWidget accountId={accountId} />
-        <GoalsProgressWidget accountId={accountId} />
-        <RealtimeActivityFeed accountId={accountId} />
-      </motion.div>
-
-      {/* Charts Row */}
-      <motion.div 
-        className="grid gap-6 lg:grid-cols-3"
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.5 }}
       >
         <RevenueChart accountId={accountId} />
         <RecentNoShows accountId={accountId} />
         <RecentActivity accountId={accountId} />
       </motion.div>
 
-      {/* Performance & Alerts Row */}
-      <motion.div 
+      {/* Performance & Alerts Row - REAL DATA */}
+      <motion.div
         className="grid gap-6 lg:grid-cols-2"
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.55 }}
+        transition={{ delay: 0.5 }}
       >
         <PerformanceWidget />
         <NoShowAlerts accountId={accountId} />
       </motion.div>
 
-      {/* Stats Comparison Row */}
-      <motion.div 
-        className="grid gap-6 lg:grid-cols-2"
+      {/* Business Analytics Row - REAL DATA */}
+      <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.58 }}
-      >
-        <StatsComparisonWidget accountId={accountId} />
-        <QuickStatusBanner />
-      </motion.div>
-
-      {/* Business Analytics Row */}
-      <motion.div 
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.6 }}
+        transition={{ delay: 0.55 }}
       >
         <BusinessAnalyticsWidget accountId={accountId} />
       </motion.div>
 
-      {/* Client Journey & Team Performance Row */}
-      <motion.div 
-        className="grid gap-6 lg:grid-cols-3"
+      {/* WhatsApp Status - REAL DATA */}
+      <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.63 }}
+        transition={{ delay: 0.6 }}
       >
-        <ClientJourneyTimeline accountId={accountId} />
-        <ServicePopularityWidget accountId={accountId} />
-        <TeamPerformanceWidget accountId={accountId} />
-      </motion.div>
-
-      {/* Conflicts & Forecast Row */}
-      <motion.div 
-        className="grid gap-6 lg:grid-cols-3"
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.66 }}
-      >
-        <AppointmentConflictsWidget accountId={accountId} />
-        <RevenueForecastWidget accountId={accountId} />
-        <NotificationPreferencesWidget accountId={accountId} />
-      </motion.div>
-
-      {/* Weekly Schedule & Retention Row */}
-      <motion.div 
-        className="grid gap-6 lg:grid-cols-3"
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.69 }}
-      >
-        <WeeklyScheduleOverview accountId={accountId} />
-        <ClientRetentionAnalytics accountId={accountId} />
-        <QuickReportsGenerator accountId={accountId} />
-      </motion.div>
-
-      {/* Smart Suggestions & Birthdays Row */}
-      <motion.div 
-        className="grid gap-6 lg:grid-cols-3"
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.72 }}
-      >
-        <SmartSuggestionsWidget accountId={accountId} />
-        <ClientBirthdayTracker accountId={accountId} />
-        <MarketingCampaignWidget accountId={accountId} />
-      </motion.div>
-
-      {/* AI Service Recommendations Row */}
-      <motion.div 
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.75 }}
-      >
-        <AIServiceRecommendations accountId={accountId} />
-      </motion.div>
-
-      {/* Inventory & Staff Schedule Row */}
-      <motion.div 
-        className="grid gap-6 lg:grid-cols-3"
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.78 }}
-      >
-        <InventoryTrackerWidget accountId={accountId} />
-        <StaffScheduleWidget accountId={accountId} />
-        <FinancialHealthWidget accountId={accountId} />
-      </motion.div>
-
-      {/* Customer Feedback & Loyalty Row */}
-      <motion.div 
-        className="grid gap-6 lg:grid-cols-3"
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.81 }}
-      >
-        <CustomerFeedbackWidget accountId={accountId} />
-        <LoyaltyProgramWidget accountId={accountId} />
-        <CompetitorAnalysisWidget accountId={accountId} />
-      </motion.div>
-
-      {/* Waitlist & Promotions Row */}
-      <motion.div 
-        className="grid gap-6 lg:grid-cols-3"
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.84 }}
-      >
-        <WaitlistManagementWidget accountId={accountId} />
-        <PromotionalCodesWidget accountId={accountId} />
-        <RevenueBreakdownWidget accountId={accountId} />
-      </motion.div>
-
-      {/* Social Media & Reminders Row */}
-      <motion.div 
-        className="grid gap-6 lg:grid-cols-3"
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.87 }}
-      >
-        <SocialMediaWidget accountId={accountId} />
-        <AppointmentRemindersWidget accountId={accountId} />
-        <PerformanceMetricsWidget accountId={accountId} />
-      </motion.div>
-
-      {/* Realtime Metrics Row */}
-      <motion.div 
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.90 }}
-      >
-        <RealtimeMetricsWidget accountId={accountId} />
+        <WhatsAppStatusWidget accountId={accountId} />
       </motion.div>
     </motion.div>
   )
@@ -653,6 +497,8 @@ function MainPageContent() {
         return <SettingsPage />
       case 'admin':
         return <AdminSettingsPage />
+      case 'ui-kit':
+        return <UiKitPage />
       default:
         return <DashboardContent accountId={accountId} />
     }

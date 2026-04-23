@@ -425,8 +425,8 @@ export function AppointmentsPage() {
     return grouped
   }, [dayAppointments])
 
-  const handlePrevDay = () => setSelectedDate(prev => subDays(prev, 1))
-  const handleNextDay = () => setSelectedDate(prev => addDays(prev, 1))
+  const handlePrevDay = () => setSelectedDate(prev => viewMode === 'week' ? addDays(prev, -7) : subDays(prev, 1))
+  const handleNextDay = () => setSelectedDate(prev => viewMode === 'week' ? addDays(prev, 7) : addDays(prev, 1))
   const handleToday = () => setSelectedDate(new Date())
 
   const handleOpenDialog = useCallback((appointment?: Appointment) => {
@@ -625,6 +625,46 @@ export function AppointmentsPage() {
   // Week view dates
   const weekStart = startOfWeek(selectedDate, { weekStartsOn: 1 })
   const weekDays = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i))
+  const weekDayStrs = weekDays.map(d => format(d, 'yyyy-MM-dd'))
+
+  // Week view: appointments grouped by day and time slot
+  const weekAppointmentsByDayAndSlot = useMemo(() => {
+    const wStart = startOfWeek(selectedDate, { weekStartsOn: 1 })
+    const wDays = Array.from({ length: 7 }, (_, i) => addDays(wStart, i))
+    const wDayStrs = wDays.map(d => format(d, 'yyyy-MM-dd'))
+
+    const grouped: Record<string, Record<string, Appointment[]>> = {}
+    wDayStrs.forEach(ds => {
+      grouped[ds] = {}
+      timeSlots.forEach(slot => {
+        grouped[ds][slot] = []
+      })
+    })
+
+    let filtered = appointments.filter(apt => wDayStrs.includes(apt.date))
+    if (selectedProfessionalFilter) {
+      filtered = filtered.filter(apt => apt.professionalName === selectedProfessionalFilter)
+    }
+
+    filtered.forEach(apt => {
+      if (grouped[apt.date] && grouped[apt.date][apt.time]) {
+        grouped[apt.date][apt.time].push(apt)
+      }
+    })
+
+    return grouped
+  }, [appointments, selectedDate, selectedProfessionalFilter])
+
+  // Week appointments count
+  const weekAppointmentsCount = useMemo(() => {
+    const wStart = startOfWeek(selectedDate, { weekStartsOn: 1 })
+    const wDayStrs = Array.from({ length: 7 }, (_, i) => format(addDays(wStart, i), 'yyyy-MM-dd'))
+    let filtered = appointments.filter(apt => wDayStrs.includes(apt.date))
+    if (selectedProfessionalFilter) {
+      filtered = filtered.filter(apt => apt.professionalName === selectedProfessionalFilter)
+    }
+    return filtered.length
+  }, [appointments, selectedDate, selectedProfessionalFilter])
 
   // Loading state - only show skeleton on INITIAL load, not on refresh
   if (isLoading && isInitialLoad) {
@@ -702,7 +742,10 @@ export function AppointmentsPage() {
         <div>
           <h2 className="text-2xl font-bold">Agendamentos</h2>
           <p className="text-muted-foreground">
-            {dayAppointments.length} agendamento(s) para {format(selectedDate, "d 'de' MMMM", { locale: ptBR })}
+            {viewMode === 'week'
+              ? `${weekAppointmentsCount} agendamento(s) na semana`
+              : `${dayAppointments.length} agendamento(s) para ${format(selectedDate, "d 'de' MMMM", { locale: ptBR })}`
+            }
             {selectedProfessionalFilter && ` • Filtrado: ${selectedProfessionalFilter}`}
           </p>
         </div>
@@ -762,20 +805,32 @@ export function AppointmentsPage() {
             </div>
             
             <div className="flex items-center gap-2">
-              <div className={cn(
-                'text-center px-4 py-2 rounded-lg',
-                isToday(selectedDate) && 'bg-green-500/10 text-green-600 font-medium'
-              )}>
-                <div className="text-sm text-muted-foreground">
-                  {format(selectedDate, 'EEEE', { locale: ptBR })}
+              {viewMode === 'week' ? (
+                <div className="text-center px-4 py-2 rounded-lg">
+                  <div className="text-sm text-muted-foreground">Semana</div>
+                  <div className="text-lg font-bold">
+                    {format(weekStart, 'd')}–{format(addDays(weekStart, 6), 'd')}
+                  </div>
+                  <div className="text-sm">
+                    {format(weekStart, "MMM yyyy", { locale: ptBR })}
+                  </div>
                 </div>
-                <div className="text-xl font-bold">
-                  {format(selectedDate, 'd')}
+              ) : (
+                <div className={cn(
+                  'text-center px-4 py-2 rounded-lg',
+                  isToday(selectedDate) && 'bg-green-500/10 text-green-600 font-medium'
+                )}>
+                  <div className="text-sm text-muted-foreground">
+                    {format(selectedDate, 'EEEE', { locale: ptBR })}
+                  </div>
+                  <div className="text-xl font-bold">
+                    {format(selectedDate, 'd')}
+                  </div>
+                  <div className="text-sm">
+                    {format(selectedDate, 'MMMM', { locale: ptBR })}
+                  </div>
                 </div>
-                <div className="text-sm">
-                  {format(selectedDate, 'MMMM', { locale: ptBR })}
-                </div>
-              </div>
+              )}
             </div>
             
             <div className="flex gap-1">
@@ -821,7 +876,7 @@ export function AppointmentsPage() {
                   professionals.map((prof) => {
                     const isSelected = selectedProfessionalFilter === prof.name
                     const count = appointments
-                      .filter(a => a.date === dateStr && a.professionalName === prof.name)
+                      .filter(a => (viewMode === 'week' ? weekDayStrs.includes(a.date) : a.date === dateStr) && a.professionalName === prof.name)
                       .length
                     return (
                       <motion.button
@@ -889,53 +944,165 @@ export function AppointmentsPage() {
             </div>
           </div>
 
-          {/* Time Slots */}
-          <div className="lg:col-span-3">
-            <Card className="border-0 shadow-md">
-              <CardContent className="p-0">
-                <ScrollArea className="h-[600px]">
-                  <div className="relative">
-                    {/* Time column */}
+          {/* Time Slots - Day View or Week View */}
+          <div className={viewMode === 'week' ? 'lg:col-span-3' : 'lg:col-span-3'}>
+            {viewMode === 'day' ? (
+              /* Day View */
+              <Card className="border-0 shadow-md">
+                <CardContent className="p-0">
+                  <ScrollArea className="h-[600px]">
+                    <div className="relative">
+                      {/* Time column */}
+                      <div className="flex">
+                        <div className="w-16 flex-shrink-0 border-r border-border">
+                          {timeSlots.map((slot) => (
+                            <div
+                              key={slot}
+                              className="h-14 flex items-start justify-end pr-2 pt-1 text-xs text-muted-foreground font-mono"
+                            >
+                              {slot}
+                            </div>
+                          ))}
+                        </div>
+
+                        {/* Appointments grid with drop zones */}
+                        <div className="flex-1 relative">
+                          {timeSlots.map((slot) => (
+                            <DroppableTimeSlot
+                              key={slot}
+                              slot={slot}
+                              appointments={appointmentsByTimeSlot[slot] || []}
+                              onEdit={handleOpenDialog}
+                              onStatusChange={handleStatusChange}
+                              onDelete={handleDelete}
+                            />
+                          ))}
+
+                          {/* Empty State - Only show when no appointments and not dragging */}
+                          {dayAppointments.length === 0 && !draggedAppointment && (
+                            <div className="absolute inset-0 flex items-center justify-center bg-background/80 backdrop-blur-sm z-10">
+                              <EmptyState 
+                                type="appointments" 
+                                onAction={() => handleOpenDialog()}
+                              />
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </ScrollArea>
+                </CardContent>
+              </Card>
+            ) : (
+              /* Week View */
+              <Card className="border-0 shadow-md">
+                <CardContent className="p-0">
+                  <ScrollArea className="h-[600px]">
+                    {/* Day headers */}
+                    <div className="flex sticky top-0 bg-background z-10 border-b">
+                      <div className="w-14 flex-shrink-0 border-r border-border" />
+                      {weekDays.map((day) => (
+                        <div
+                          key={format(day, 'yyyy-MM-dd')}
+                          className={cn(
+                            'flex-1 text-center py-2 border-r border-border/50 last:border-r-0',
+                            isToday(day) && 'bg-green-500/10'
+                          )}
+                        >
+                          <div className="text-[10px] text-muted-foreground font-medium uppercase">
+                            {format(day, 'EEE', { locale: ptBR })}
+                          </div>
+                          <div className={cn(
+                            'text-sm font-bold',
+                            isToday(day) && 'text-green-600'
+                          )}>
+                            {format(day, 'd')}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Time grid */}
                     <div className="flex">
-                      <div className="w-16 flex-shrink-0 border-r border-border">
+                      {/* Time labels column */}
+                      <div className="w-14 flex-shrink-0 border-r border-border">
                         {timeSlots.map((slot) => (
                           <div
                             key={slot}
-                            className="h-14 flex items-start justify-end pr-2 pt-1 text-xs text-muted-foreground font-mono"
+                            className="h-10 flex items-start justify-end pr-1 pt-0.5 text-[10px] text-muted-foreground font-mono"
                           >
                             {slot}
                           </div>
                         ))}
                       </div>
 
-                      {/* Appointments grid with drop zones */}
-                      <div className="flex-1 relative">
-                        {timeSlots.map((slot) => (
-                          <DroppableTimeSlot
-                            key={slot}
-                            slot={slot}
-                            appointments={appointmentsByTimeSlot[slot] || []}
-                            onEdit={handleOpenDialog}
-                            onStatusChange={handleStatusChange}
-                            onDelete={handleDelete}
-                          />
-                        ))}
+                      {/* Day columns */}
+                      {weekDays.map((day) => {
+                        const dayStr = format(day, 'yyyy-MM-dd')
+                        const daySlotData = weekAppointmentsByDayAndSlot[dayStr] || {}
+                        const isTodayCol = isToday(day)
 
-                        {/* Empty State - Only show when no appointments and not dragging */}
-                        {dayAppointments.length === 0 && !draggedAppointment && (
-                          <div className="absolute inset-0 flex items-center justify-center bg-background/80 backdrop-blur-sm z-10">
-                            <EmptyState 
-                              type="appointments" 
-                              onAction={() => handleOpenDialog()}
-                            />
+                        return (
+                          <div
+                            key={dayStr}
+                            className={cn(
+                              'flex-1 border-r border-border/50 last:border-r-0 relative',
+                              isTodayCol && 'bg-green-500/5'
+                            )}
+                          >
+                            {timeSlots.map((slot) => {
+                              const slotApts = daySlotData[slot] || []
+                              return (
+                                <div
+                                  key={slot}
+                                  className="h-10 border-b border-border/30 relative"
+                                >
+                                  {slotApts.map((apt) => {
+                                    const slotsNeeded = Math.ceil(apt.duration / 30)
+                                    const height = slotsNeeded * 40 - 2
+                                    return (
+                                      <div
+                                        key={apt.id}
+                                        className="absolute left-0.5 right-0.5 rounded border-l-2 p-0.5 cursor-pointer shadow-sm hover:shadow-md transition-shadow overflow-hidden"
+                                        style={{
+                                          backgroundColor: `${apt.professionalColor}18`,
+                                          borderLeftColor: apt.professionalColor,
+                                          height: `${height}px`,
+                                        }}
+                                        onClick={() => handleOpenDialog(apt)}
+                                      >
+                                        <p className="text-[10px] font-medium truncate leading-tight">{apt.clientName}</p>
+                                        <p className="text-[9px] text-muted-foreground truncate leading-tight">{apt.serviceName}</p>
+                                        <Badge
+                                          variant="outline"
+                                          className={cn('text-[8px] px-0.5 py-0 h-3 mt-0.5', statusColors[apt.status])}
+                                        >
+                                          {statusLabels[apt.status]}
+                                        </Badge>
+                                      </div>
+                                    )
+                                  })}
+                                </div>
+                              )
+                            })}
                           </div>
-                        )}
-                      </div>
+                        )
+                      })}
                     </div>
-                  </div>
-                </ScrollArea>
-              </CardContent>
-            </Card>
+
+                    {/* Week Empty State */}
+                    {weekAppointmentsCount === 0 && (
+                      <div className="flex items-center justify-center py-12">
+                        <EmptyState
+                          type="appointments"
+                          onAction={() => handleOpenDialog()}
+                        />
+                      </div>
+                    )}
+                  </ScrollArea>
+                </CardContent>
+              </Card>
+            )}
           </div>
         </div>
 

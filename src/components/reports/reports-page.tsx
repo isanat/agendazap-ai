@@ -143,36 +143,115 @@ export function ReportsPage() {
 
     try {
       if (exportFormat === 'csv') {
-        // Generate real CSV from the data
+        // Generate improved CSV with flat tabular format for spreadsheet use
         const kpis = reportData.kpis
-        const rows = [
-          ['Relatório AgendaZap'],
-          ['Período', period],
+
+        // Format currency for pt-BR (comma as decimal separator)
+        const fmtCurrency = (v: number) => v.toFixed(2).replace('.', ',')
+        const fmtPercent = (v: number) => `${v > 0 ? '+' : ''}${v.toFixed(1)}%`.replace('.', ',')
+
+        // Get period date range from API data
+        const periodStart = reportData.periodStart ? new Date(reportData.periodStart).toLocaleDateString('pt-BR') : ''
+        const periodEnd = reportData.periodEnd ? new Date(reportData.periodEnd).toLocaleDateString('pt-BR') : ''
+
+        // Section 1: Summary KPIs
+        const summaryRows = [
+          ['Relatório AgendZap'],
+          ['Período', periodStart && periodEnd ? `${periodStart} a ${periodEnd}` : period],
+          ['Gerado em', new Date().toLocaleDateString('pt-BR')],
           [''],
-          ['Indicadores'],
-          ['Faturamento Total', `R$ ${kpis.totalRevenue.toFixed(2)}`],
+          ['RESUMO DE INDICADORES'],
+          ['Indicador', 'Valor'],
+          ['Faturamento Total', `R$ ${fmtCurrency(kpis.totalRevenue)}`],
+          ['Crescimento Receita', fmtPercent(kpis.revenueGrowth ?? 0)],
           ['Total Agendamentos', String(kpis.totalAppointments)],
-          ['Taxa No-Show', `${kpis.noShowRate}%`],
-          ['Receita Perdida', `R$ ${kpis.lostRevenue.toFixed(2)}`],
-          ['Recuperação PIX', `R$ ${kpis.pixRecoveryAmount.toFixed(2)}`],
+          ['Crescimento Agendamentos', fmtPercent(kpis.appointmentGrowth ?? 0)],
+          ['Taxa No-Show', `${String(kpis.noShowRate).replace('.', ',')}%`],
+          ['Receita Perdida', `R$ ${fmtCurrency(kpis.lostRevenue)}`],
+          ['Recuperação PIX', `R$ ${fmtCurrency(kpis.pixRecoveryAmount)}`],
           [''],
-          ['Agendamentos por Status'],
-          ...Object.entries(kpis.appointmentsByStatus).map(([status, count]) => [status, String(count)]),
-          [''],
-          ['Top Clientes'],
-          ['Nome', 'Visitas', 'Faturamento'],
-          ...reportData.topClients.map(c => [c.name, String(c.visits), `R$ ${c.revenue.toFixed(2)}`]),
-          [''],
-          ['Top Serviços'],
-          ['Serviço', 'Agendamentos', 'Faturamento'],
-          ...reportData.topServices.map(s => [s.name, String(s.count), `R$ ${s.revenue.toFixed(2)}`]),
         ]
 
-        const csvContent = rows.map(row =>
-          row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(',')
-        ).join('\n')
+        // Section 2: Appointments by Status
+        const statusRows = [
+          ['AGENDAMENTOS POR STATUS'],
+          ['Status', 'Quantidade', 'Percentual'],
+          ...Object.entries(kpis.appointmentsByStatus).map(([status, count]) => {
+            const total = kpis.totalAppointments || 1
+            const pct = ((count as number) / total * 100).toFixed(1).replace('.', ',')
+            const statusLabel: Record<string, string> = {
+              pending: 'Pendente', confirmed: 'Confirmado', completed: 'Concluído',
+              cancelled: 'Cancelado', no_show: 'Não Compareceu'
+            }
+            return [statusLabel[status] || status, String(count), `${pct}%`]
+          }),
+          [''],
+        ]
 
-        // Download CSV
+        // Section 3: Revenue Chart Data
+        const revenueRows = reportData.revenueChartData?.length ? [
+          ['RECEITA DIÁRIA'],
+          ['Data', 'Faturamento (R$)', 'Agendamentos'],
+          ...reportData.revenueChartData.map((d: { date: string; revenue: number; appointments: number }) => [
+            new Date(d.date).toLocaleDateString('pt-BR'),
+            fmtCurrency(d.revenue),
+            String(d.appointments || 0),
+          ]),
+          [''],
+        ] : []
+
+        // Section 4: Top Clients
+        const clientRows = [
+          ['TOP CLIENTES'],
+          ['Nome', 'Visitas', 'Faturamento (R$)'],
+          ...reportData.topClients.map(c => [c.name, String(c.visits), fmtCurrency(c.revenue)]),
+          [''],
+        ]
+
+        // Section 5: Top Services
+        const serviceRows = [
+          ['TOP SERVIÇOS'],
+          ['Serviço', 'Agendamentos', 'Faturamento (R$)'],
+          ...reportData.topServices.map(s => [s.name, String(s.count), fmtCurrency(s.revenue)]),
+          [''],
+        ]
+
+        // Section 6: No-Show Trend
+        const noShowRows = reportData.noShowTrend?.length ? [
+          ['TENDÊNCIA NO-SHOW (6 MESES)'],
+          ['Mês', 'Taxa No-Show (%)', 'Total Agendamentos'],
+          ...reportData.noShowTrend.map((m: { month: string; rate: number; total: number }) => [
+            m.month,
+            m.rate.toFixed(1).replace('.', ','),
+            String(m.total),
+          ]),
+          [''],
+        ] : []
+
+        // Section 7: Service Distribution
+        const distRows = reportData.serviceDistribution?.length ? [
+          ['DISTRIBUIÇÃO POR SERVIÇO'],
+          ['Serviço', 'Quantidade', 'Percentual'],
+          ...reportData.serviceDistribution.map((s: { name: string; count: number; percentage: number }) => [
+            s.name, String(s.count), `${s.percentage.toFixed(1).replace('.', ',')}%`
+          ]),
+        ] : []
+
+        const allRows = [
+          ...summaryRows,
+          ...statusRows,
+          ...revenueRows,
+          ...clientRows,
+          ...serviceRows,
+          ...noShowRows,
+          ...distRows,
+        ]
+
+        const csvContent = allRows.map(row =>
+          row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(';')
+        ).join('\r\n')
+
+        // Download CSV with BOM for UTF-8 Excel compatibility
         const blob = new Blob(['\ufeff' + csvContent], { type: 'text/csv;charset=utf-8;' })
         const url = URL.createObjectURL(blob)
         const link = document.createElement('a')
@@ -184,7 +263,7 @@ export function ReportsPage() {
         URL.revokeObjectURL(url)
 
         toast.success('Relatório CSV exportado com sucesso!', {
-          description: 'O arquivo foi baixado.',
+          description: 'Formato melhorado com separador ; e encoding pt-BR',
           icon: <CheckCircle className="w-4 h-4 text-green-500" />
         })
       } else if (exportFormat === 'pdf') {
@@ -405,7 +484,7 @@ ${reportData.topServices.map((s, i) => `${i + 1}. ${s.name} - ${s.count}x - R$ $
                         (kpis?.revenueGrowth ?? 0) > 0 ? 'text-green-600' : 'text-red-600'
                       )}>
                         {(kpis?.revenueGrowth ?? 0) > 0 ? <ArrowUpRight className="w-4 h-4" /> : <ArrowDownRight className="w-4 h-4" />}
-                        <span className="font-medium">{kpis?.revenueGrowth ?? 0 > 0 ? '+' : ''}{kpis?.revenueGrowth}%</span>
+                        <span className="font-medium">{(kpis?.revenueGrowth ?? 0) > 0 ? '+' : ''}{kpis?.revenueGrowth}%</span>
                         <span className="text-muted-foreground">vs período anterior</span>
                       </div>
                     </TooltipTrigger>
@@ -440,7 +519,7 @@ ${reportData.topServices.map((s, i) => `${i + 1}. ${s.name} - ${s.count}x - R$ $
                   (kpis?.appointmentGrowth ?? 0) > 0 ? 'text-green-600' : 'text-red-600'
                 )}>
                   {(kpis?.appointmentGrowth ?? 0) > 0 ? <ArrowUpRight className="w-4 h-4" /> : <ArrowDownRight className="w-4 h-4" />}
-                  <span className="font-medium">{kpis?.appointmentGrowth ?? 0 > 0 ? '+' : ''}{kpis?.appointmentGrowth}%</span>
+                  <span className="font-medium">{(kpis?.appointmentGrowth ?? 0) > 0 ? '+' : ''}{kpis?.appointmentGrowth}%</span>
                   <span className="text-muted-foreground">vs período anterior</span>
                 </div>
               )}
@@ -469,7 +548,7 @@ ${reportData.topServices.map((s, i) => `${i + 1}. ${s.name} - ${s.count}x - R$ $
                   (kpis?.noShowRateChange ?? 0) < 0 ? 'text-green-600' : 'text-red-600'
                 )}>
                   {(kpis?.noShowRateChange ?? 0) < 0 ? <ArrowDownRight className="w-4 h-4" /> : <ArrowUpRight className="w-4 h-4" />}
-                  <span className="font-medium">{kpis?.noShowRateChange ?? 0 > 0 ? '+' : ''}{kpis?.noShowRateChange}%</span>
+                  <span className="font-medium">{(kpis?.noShowRateChange ?? 0) > 0 ? '+' : ''}{kpis?.noShowRateChange}%</span>
                   <span className="text-muted-foreground">vs período anterior</span>
                 </div>
               )}
