@@ -145,3 +145,61 @@ Stage Summary:
 - System status banner now checks real service status instead of always showing "Online"
 - CSV export now includes detailed appointment-level data
 - Calendar week view was already implemented
+
+---
+Task ID: 5
+Agent: Main Agent
+Task: Fix combo/package booking, PIX QR Code not sent, client data not saved, proactive messaging improvements
+
+Work Log:
+- Identified root cause of "Combo Masculino" booking failure: AI uses package names in [AGENDAR:] command but createAppointmentFromBooking() only searches the Service table, not the Package table
+- When booking fails, AI tells client "Vou gerar o QR Code PIX" but no PIX is generated since appointment was never created
+- Client data gaps found: updateServiceHistory() and updateClientBirthDate() exist but are never called, lastVisit never updated, no birthDate field
+
+Fixes applied:
+1. **Package/Combo booking support in createAppointmentFromBooking()** (webhook/route.ts):
+   - STEP 1: Check Package table first when service name doesn't match a Service
+   - If package found, create individual appointments for each service in the package
+   - Generate single PIX payment for the total package price
+   - STEP 2b: Try splitting "Service1 + Service2" or "Service1 e Service2" format
+   - If split works, find each individual service and create sequential appointments
+   - Generate PIX for total price of all services combined
+
+2. **Booking failure handling** (webhook/route.ts):
+   - When booking fails, replace PIX promise phrases from AI response
+   - Append user-friendly error message (service not found, time conflict, professional unavailable)
+   - Client is now properly informed instead of being told "QR Code will be sent"
+
+3. **Client data improvements** (webhook/route.ts + ai-context-service.ts):
+   - Call updateServiceHistory() after every appointment creation
+   - Update client.lastVisit when appointment is created
+   - Add detectBirthDateInMessage() function for auto-detection from WhatsApp messages
+   - Add updateClientBirthDate() to save birth date to database
+   - Birth date detection added to webhook message processing pipeline
+
+4. **Birth date schema** (prisma/schema.prisma):
+   - Added birthDate DateTime? field to Client model
+   - Added to ClientContext interface in ai-context-service.ts
+   - Pushed schema to Neon PostgreSQL
+
+5. **AI prompt improvements** (ai-context-service.ts):
+   - Package names are now valid in [AGENDAR:] commands
+   - "Service1 + Service2" format for combos documented
+   - Luna instructed to ask for birth date for new clients
+   - Birth date shown in client context when available (or warning if not)
+
+6. **BusinessAnalyticsWidget hardcoded values fix**:
+   - avgTicket now calculated from revenue/appointments instead of hardcoded 0
+   - returnRate now calculated from total/new clients instead of hardcoded 0
+   - monthlyGoal now comes from API instead of hardcoded 40000
+   - Progress bar only shown when goal AND revenue exist
+
+All changes compile clean (0 errors). Committed and pushed to GitHub (commit d69acbc). Vercel deployment triggered.
+
+Stage Summary:
+- CRITICAL: Package/combo booking now works (was the #1 complaint - "Combo Masculino" not found)
+- CRITICAL: PIX QR Code is now actually sent when booking succeeds
+- CRITICAL: When booking fails, client gets honest error message instead of false PIX promise
+- Client service history and lastVisit are now properly updated
+- Birth date can be captured and stored for future proactive messaging
+- BusinessAnalyticsWidget no longer shows fake hardcoded values
