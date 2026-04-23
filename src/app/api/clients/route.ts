@@ -4,7 +4,12 @@ import { NextRequest, NextResponse } from 'next/server'
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
-    const accountId = searchParams.get('accountId')
+    let accountId = searchParams.get('accountId')
+
+    // Fallback: try x-account-id header from authFetch
+    if (!accountId) {
+      accountId = request.headers.get('x-account-id')
+    }
 
     if (!accountId) {
       return NextResponse.json({ error: 'accountId required' }, { status: 400 })
@@ -30,7 +35,12 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
-    const { accountId, name, phone, email, notes } = body
+    let { accountId, name, phone, email, notes } = body
+
+    // Fallback: try x-account-id header from authFetch
+    if (!accountId) {
+      accountId = request.headers.get('x-account-id')
+    }
 
     if (!accountId || !name || !phone) {
       return NextResponse.json({ error: 'Missing required fields' }, { status: 400 })

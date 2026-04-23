@@ -5,8 +5,13 @@ import { hashPassword } from '@/lib/auth'
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
-    const accountId = searchParams.get('accountId')
+    let accountId = searchParams.get('accountId')
     const userId = searchParams.get('userId')
+
+    // Fallback: try x-account-id header from authFetch
+    if (!accountId) {
+      accountId = request.headers.get('x-account-id')
+    }
 
     // If userId is provided, get the professional linked to that user
     // (professional user viewing their own schedule)
@@ -57,7 +62,12 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
-    const { accountId, name, phone, email, color, createUserAccount, userPassword, services } = body
+    let { accountId, name, phone, email, color, createUserAccount, userPassword, services } = body
+
+    // Fallback: try x-account-id header from authFetch
+    if (!accountId) {
+      accountId = request.headers.get('x-account-id')
+    }
 
     if (!accountId || !name) {
       return NextResponse.json({ error: 'Missing required fields' }, { status: 400 })
@@ -171,13 +181,14 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ error: 'Professional not found' }, { status: 404 })
     }
 
-    const updateData: any = {
-      name,
-      phone,
-      email,
-      color,
-      isActive,
-    }
+    const updateData: Record<string, unknown> = {}
+    
+    // Only include fields that are explicitly provided (not undefined)
+    if (name !== undefined) updateData.name = name
+    if (phone !== undefined) updateData.phone = phone || null
+    if (email !== undefined) updateData.email = email || null
+    if (color !== undefined) updateData.color = color
+    if (isActive !== undefined) updateData.isActive = isActive
 
     // Handle user linking/unlinking
     if (unlinkUser && existingProfessional.userId) {
@@ -234,13 +245,23 @@ export async function PUT(request: NextRequest) {
       })
 
       // Create new service associations
-      if (services.length > 0) {
-        await db.serviceProfessional.createMany({
-          data: services.map((serviceId: string) => ({
-            professionalId: id,
-            serviceId,
-          }))
+      if (Array.isArray(services) && services.length > 0) {
+        // Validate that all serviceIds exist
+        const validServices = await db.service.findMany({
+          where: { id: { in: services }, accountId: existingProfessional.accountId },
+          select: { id: true }
         })
+        const validServiceIds = validServices.map(s => s.id)
+        
+        if (validServiceIds.length > 0) {
+          await db.serviceProfessional.createMany({
+            data: validServiceIds.map((serviceId: string) => ({
+              professionalId: id,
+              serviceId,
+            })),
+            skipDuplicates: true,
+          })
+        }
       }
     }
 
@@ -260,7 +281,12 @@ export async function PUT(request: NextRequest) {
     return NextResponse.json({ professional })
   } catch (error) {
     console.error('Error updating professional:', error)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    const message = error instanceof Error ? error.message : 'Unknown error'
+    // Provide more specific error for Prisma unique constraint violations
+    if (message.includes('Unique constraint') || message.includes('unique')) {
+      return NextResponse.json({ error: 'Conflito: já existe um profissional com esses dados', details: message }, { status: 409 })
+    }
+    return NextResponse.json({ error: 'Internal server error', details: message }, { status: 500 })
   }
 }
 
