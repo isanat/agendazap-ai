@@ -2210,20 +2210,61 @@ async function generateAIResponse(
 async function getFallbackResponse(accountId: string, message: string): Promise<string> {
   const account = await db.account.findUnique({ where: { id: accountId } });
   const businessName = account?.businessName || 'nosso estabelecimento';
-  
+
+  // Fetch real services and professionals for context-rich fallback
+  const services = await db.service.findMany({
+    where: { accountId, isActive: true },
+    select: { name: true, price: true, durationMinutes: true },
+    orderBy: { name: 'asc' },
+    take: 10,
+  });
+
+  const professionals = await db.professional.findMany({
+    where: { accountId, isActive: true },
+    select: { name: true },
+    orderBy: { name: 'asc' },
+    take: 5,
+  });
+
+  const servicesList = services.map(s => `• ${s.name}: R$ ${s.price.toFixed(2)} (${s.durationMinutes} min)`).join('\n');
+  const professionalsList = professionals.map(p => p.name).join(', ');
+
   const lowerMessage = message.toLowerCase();
-  
-  if (/agend|marcar|horário|reservar/.test(lowerMessage)) {
-    return `Olá! 👋 Para agendar em ${businessName}, me diga qual serviço você gostaria e qual horário prefere!`;
+
+  if (/agend|marcar|horário|reservar|corte|manicure|pedicure|sobrancelha|progressiva|escova|hidrata|tintura|maquiagem|depila/i.test(lowerMessage)) {
+    let response = `Olá! 😊 Aqui estão nossos serviços disponíveis:\n\n${servicesList}\n\n`;
+    if (professionalsList) {
+      response += `👩‍💼 Nossos profissionais: ${professionalsList}\n\n`;
+    }
+    response += `Qual serviço e horário você gostaria? Posso te ajudar a agendar!`;
+    return response;
   }
-  if (/preço|valor|quanto/.test(lowerMessage)) {
+
+  if (/preço|valor|quanto|custa/i.test(lowerMessage)) {
+    if (services.length > 0) {
+      return `Olá! Aqui estão nossos preços:\n\n${servicesList}\n\nPosso te ajudar a agendar algum desses serviços? 😊`;
+    }
     return `Olá! Posso te informar sobre nossos serviços e valores. Qual serviço você gostaria de saber?`;
   }
-  if (/endereço|onde|localização/.test(lowerMessage)) {
+
+  if (/endereço|onde|localização/i.test(lowerMessage)) {
     return `Estamos em ${account?.address || 'nossa localização'}. Funcionamos de ${account?.openingTime || '9h'} às ${account?.closingTime || '18h'}. Posso te ajudar com mais alguma coisa?`;
   }
-  
-  return `Olá! Sou a Luna, assistente virtual de ${businessName}. Como posso te ajudar hoje? 😊`;
+
+  if (/profissional|quem|atende/i.test(lowerMessage)) {
+    if (professionalsList) {
+      return `Nossos profissionais: ${professionalsList}\n\nCom quem você gostaria de agendar? 😊`;
+    }
+    return `Posso te ajudar a agendar! Qual serviço você gostaria?`;
+  }
+
+  // Default greeting with brief service list
+  let response = `Olá! Sou a Luna, assistente virtual de ${businessName}. Como posso te ajudar hoje? 😊\n\n`;
+  if (services.length > 0) {
+    response += `Nossos serviços:\n${services.slice(0, 5).map(s => `• ${s.name}: R$ ${s.price.toFixed(2)}`).join('\n')}\n\n`;
+  }
+  response += `Posso te ajudar a agendar!`;
+  return response;
 }
 
 /**

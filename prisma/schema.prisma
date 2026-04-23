@@ -444,7 +444,7 @@ model SubscriptionPlan {
   maxServices            Int                   @default(10)
   maxAppointmentsMonth   Int                   @default(100)
   maxClients             Int                   @default(500)
-  maxAiTokensMonth       Int                   @default(100000)
+  maxAiTokensMonth       Int                   @default(500000)
   aiModelType            String                @default("basic")
   includeWhatsApp        Boolean               @default(true)
   includeAiAssistant     Boolean               @default(false)

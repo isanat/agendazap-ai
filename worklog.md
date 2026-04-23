@@ -185,3 +185,46 @@ Stage Summary:
 - 401 errors on /api/appointments should be resolved for valid authenticated requests
 - Professionals POST now respects the isActive field from the frontend form
 - PUT/DELETE handlers have proper access control for both user auth and x-account-id auth
+
+---
+Task ID: 1
+Agent: full-stack-developer
+Task: Fix AI Response Quality Issues - Token Limit and Generic Fallback
+
+Work Log:
+- Read worklog.md and all relevant source files
+- Read getFallbackResponse() in `/src/app/api/webhooks/evolution/route.ts` (line 2210)
+- Read generateSystemPrompt() in `/src/lib/ai-context-service.ts` (line 940+)
+- Read SubscriptionPlan schema with maxAiTokensMonth field
+- Verified token usage: acc_mo4pje9qiuzyq8jd used 101,598 tokens against 100K limit
+
+Fix 1: getFallbackResponse() now includes REAL service and professional data
+- Added db.service.findMany() to fetch active services (name, price, duration) - up to 10
+- Added db.professional.findMany() to fetch active professionals (name) - up to 5
+- Expanded keyword detection regex to include: corte, manicure, pedicure, sobrancelha, progressiva, escova, hidrata, tintura, maquiagem, depila
+- Scheduling intent response now includes full services list with prices and professionals
+- Price inquiry response now shows all services with prices
+- Added new "professional" keyword detection (profissional, quem, atende) with professional list
+- Default greeting now shows top 5 services with prices
+- All responses gracefully handle empty services/professionals lists
+
+Fix 2: Increased maxAiTokensMonth default from 100,000 to 500,000
+- Updated prisma/schema.prisma line 447: @default(100000) → @default(500000)
+- Ran `bun run db:push` successfully
+
+Fix 3: Updated all existing subscription plans in database to 500K tokens
+- Ran updateMany on SubscriptionPlan table: 5 records updated (free, starter, pro, business, enterprise)
+- Verified: acc_mo4pje9qiuzyq8jd now has 500K limit (was hitting 100K limit at 101,598 tokens)
+
+Fix 4: Added conciseness instructions to system prompt to reduce token usage
+- Updated REGRAS section: "Seja BREVE, use 1-2 emojis" → "Seja BREVE e CONCISA: máximo 3 frases por mensagem, use 1-2 emojis por msg, não repita saudações. Economize tokens!"
+- Updated final instruction: "Seja acolhedora, prestativa e INTELIGENTE!" → "Seja acolhedora, prestativa e INTELIGENTE! Respostas CONCISAS: máximo 3 frases, direta ao ponto!"
+
+Lint: 0 errors (2 pre-existing warnings unrelated to changes)
+Dev log: No compilation errors
+
+Stage Summary:
+- getFallbackResponse() now provides context-rich responses with real service names, prices, and professional names
+- Token limit increased 5x (100K → 500K) at both schema default and existing database records
+- System prompt includes conciseness instructions to reduce per-response token consumption
+- AI should now be functional again for account acc_mo4pje9qiuzyq8jd (101,598 / 500,000 tokens)

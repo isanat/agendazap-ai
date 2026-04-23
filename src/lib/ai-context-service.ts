@@ -948,7 +948,7 @@ ${clientContext}
 
 === REGRAS ===
 - Use o nome do cliente (${client?.name || 'novo cliente'}) se souber
-- Seja BREVE, use 1-2 emojis por msg, não repita saudações
+- Seja BREVE e CONCISA: máximo 3 frases por mensagem, use 1-2 emojis por msg, não repita saudações. Economize tokens!
 - Mantenha contexto da conversa
 - Cliente novo: PERGUNTE o nome, confirme com "Anotado, {nome}!"
 - Agendamento: serviço → profissional → data/hora → pagamento → confirmar dados + valor
@@ -985,7 +985,7 @@ Regras:
 - Se o cliente escolher PIX mas ainda não informou o CPF, NÃO inclua [AGENDAR:] ainda! Primeiro pergunte o CPF, e só agende quando receber o CPF
 - Se o cliente já informou o CPF anteriormente (consta no contexto), pode agendar normalmente
 
-Seja acolhedora, prestativa e INTELIGENTE!`;
+Seja acolhedora, prestativa e INTELIGENTE! Respostas CONCISAS: máximo 3 frases, direta ao ponto!`;
 }
 
 // === HELPERS ===
