@@ -153,6 +153,7 @@ model Client {
   accountId         String
   name              String
   phone             String
+  whatsappLid       String?              // WhatsApp LID identifier (e.g. "249541928419454") - separate from real phone
   email             String?
   cpf               String?
   birthDate         DateTime?
@@ -177,6 +178,7 @@ model Client {
 
   @@unique([accountId, phone])
   @@index([accountId])
+  @@index([accountId, whatsappLid])
 }
 
 model ClientPackage {

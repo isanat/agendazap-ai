@@ -153,6 +153,7 @@ model Client {
   accountId         String
   name              String
   phone             String
+  whatsappLid       String?              // WhatsApp LID identifier (e.g. "249541928419454") - separate from real phone
   email             String?
   cpf               String?
   birthDate         DateTime?
@@ -177,6 +178,26 @@ model Client {
 
   @@unique([accountId, phone])
   @@index([accountId])
+  @@index([accountId, whatsappLid])
+}
+
+model LidMapping {
+  id             String   @id @default(cuid())
+  lid            String   @unique  // The raw LID value (e.g. "249541928419454")
+  lidJid         String              // Full LID JID (e.g. "249541928419454@lid")
+  resolvedPhone  String?             // The resolved real phone number (e.g. "5541984195685")
+  instanceName   String?             // Evolution API instance name used for resolution
+  resolutionMethod String?           // How the phone was resolved (fetchPhoneNumber, getBaseProfile, etc.)
+  resolvedAt     DateTime?           // When the phone was successfully resolved
+  lastAttemptAt  DateTime?           // Last time we tried to resolve this LID
+  attemptCount   Int      @default(0) // Number of resolution attempts
+  status         String   @default("pending") // pending, resolved, failed
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([lid])
+  @@index([resolvedPhone])
+  @@index([status])
 }
 
 model ClientPackage {

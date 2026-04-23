@@ -17,6 +17,7 @@ interface Client {
   id: string
   name: string
   phone: string
+  whatsappLid: string | null
   email: string | null
   cpf: string | null
   birthDate: string | null
@@ -50,9 +51,25 @@ function formatCpf(cpf: string | null): string {
   return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6, 9)}-${digits.slice(9, 11)}`
 }
 
+// Helper: check if phone is a LID/JID identifier
+function isLidPhone(phone: string): boolean {
+  return phone.startsWith('lid:') || phone.startsWith('jid:')
+}
+
 // Helper: format phone
 function formatPhone(phone: string): string {
+  // Handle LID/JID identifiers - show user-friendly message
+  if (isLidPhone(phone)) {
+    return 'Telefone pendente'
+  }
   const digits = phone.replace(/\D/g, '')
+  // Handle numbers with country code (55 + 10-11 digits = 12-13 digits total)
+  if (digits.length === 13 && digits.startsWith('55')) {
+    return `(${digits.slice(2, 4)}) ${digits.slice(4, 9)}-${digits.slice(9, 13)}`
+  }
+  if (digits.length === 12 && digits.startsWith('55')) {
+    return `(${digits.slice(2, 4)}) ${digits.slice(4, 8)}-${digits.slice(8, 12)}`
+  }
   if (digits.length === 11) {
     return `(${digits.slice(0, 2)}) ${digits.slice(2, 7)}-${digits.slice(7, 11)}`
   }
@@ -202,12 +219,27 @@ export function ClientDetailDrawer({ open, onOpenChange, client, onEdit, onWhats
             </h3>
             <div className="space-y-2.5">
               <div className="flex items-center gap-3 text-sm">
-                <div className="w-8 h-8 rounded-lg bg-muted/50 flex items-center justify-center">
-                  <Phone className="w-4 h-4 text-muted-foreground" />
+                <div className={cn(
+                  "w-8 h-8 rounded-lg flex items-center justify-center",
+                  isLidPhone(client.phone) ? "bg-amber-100 dark:bg-amber-900/30" : "bg-muted/50"
+                )}>
+                  <Phone className={cn(
+                    "w-4 h-4",
+                    isLidPhone(client.phone) ? "text-amber-600" : "text-muted-foreground"
+                  )} />
                 </div>
                 <div>
                   <p className="text-xs text-muted-foreground">Telefone</p>
-                  <p className="font-medium">{formatPhone(client.phone)}</p>
+                  {isLidPhone(client.phone) ? (
+                    <div className="flex items-center gap-2">
+                      <p className="font-medium text-amber-600">Telefone pendente</p>
+                      <Badge variant="outline" className="text-[10px] bg-amber-50 dark:bg-amber-900/20 text-amber-600 border-amber-200 dark:border-amber-800 px-1.5 py-0">
+                        LID não resolvido
+                      </Badge>
+                    </div>
+                  ) : (
+                    <p className="font-medium">{formatPhone(client.phone)}</p>
+                  )}
                 </div>
               </div>
               {client.email && (
@@ -478,9 +510,11 @@ export function ClientDetailDrawer({ open, onOpenChange, client, onEdit, onWhats
                 className="flex-1 gap-2" 
                 variant="outline"
                 onClick={onWhatsApp}
+                disabled={isLidPhone(client.phone)}
+                title={isLidPhone(client.phone) ? 'Telefone ainda não identificado pelo WhatsApp' : 'Enviar mensagem no WhatsApp'}
               >
                 <MessageSquare className="w-4 h-4 text-green-600" />
-                WhatsApp
+                {isLidPhone(client.phone) ? 'WhatsApp (pendente)' : 'WhatsApp'}
               </Button>
             )}
             <Button className="flex-1 gap-2 bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700">

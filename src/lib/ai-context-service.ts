@@ -60,6 +60,7 @@ export interface ClientContext {
   id: string;
   name: string;
   phone: string;
+  whatsappLid: string | null;
   email: string | null;
   cpf: string | null;
   birthDate: Date | null;
@@ -107,8 +108,27 @@ export interface ClientContext {
 // === CLIENT MANAGEMENT ===
 
 /**
+ * Check if a phone value is a LID/JID identifier (not a real phone number)
+ * LID identifiers start with "lid:" and JID identifiers start with "jid:"
+ */
+export function isLidPhone(phone: string): boolean {
+  return phone.startsWith('lid:') || phone.startsWith('jid:');
+}
+
+/**
+ * Extract the raw LID/JID value by stripping the prefix
+ * e.g. "lid:249541928419454" -> "249541928419454"
+ */
+function extractRawLid(phone: string): string | null {
+  if (phone.startsWith('lid:')) return phone.slice(4);
+  if (phone.startsWith('jid:')) return phone.slice(4);
+  return null;
+}
+
+/**
  * Find or create a client by phone number
  * Auto-creates client with WhatsApp push name if available
+ * Handles LID/JID identifiers and stores them in whatsappLid field
  */
 export async function findOrCreateClient(
   accountId: string,
@@ -121,33 +141,58 @@ export async function findOrCreateClient(
   const isLid = phone.startsWith('lid:');
   const isJid = phone.startsWith('jid:');
   const isNonPhone = isLid || isJid;
-  const searchValue = isNonPhone ? phone : normalizedPhone;
   const searchContains = isNonPhone ? phone : normalizedPhone.slice(-9);
+  const rawLid = extractRawLid(phone);
   
-  // Try to find existing client first
-  const existingClient = await db.client.findFirst({
+  // Try to find existing client first - search by phone OR by whatsappLid
+  let existingClient = await db.client.findFirst({
     where: {
       accountId,
       phone: { contains: searchContains }
     }
   });
 
+  // If not found by phone, try to find by whatsappLid (for when client was created with LID and later resolved)
+  if (!existingClient && rawLid) {
+    existingClient = await db.client.findFirst({
+      where: {
+        accountId,
+        whatsappLid: rawLid
+      }
+    });
+  }
+
   if (existingClient) {
+    const updateData: Record<string, any> = {};
+    
     // Update push name if provided and not already set
     if (pushName && !existingClient.whatsappPushName) {
-      await db.client.update({
-        where: { id: existingClient.id },
-        data: { whatsappPushName: pushName }
-      });
+      updateData.whatsappPushName = pushName;
     }
     
     // If existing client has a LID/JID phone and we now have a real phone number, update it
-    if ((existingClient.phone.startsWith('lid:') || existingClient.phone.startsWith('jid:')) && !isNonPhone && normalizedPhone) {
+    if (isLidPhone(existingClient.phone) && !isNonPhone && normalizedPhone) {
+      // Store the old LID value in whatsappLid before overwriting phone
+      const oldRawLid = extractRawLid(existingClient.phone);
+      if (oldRawLid && !existingClient.whatsappLid) {
+        updateData.whatsappLid = oldRawLid;
+      }
+      updateData.phone = normalizedPhone;
+      console.log(`[AI Context] Client phone updated from identifier to real number: ${normalizedPhone}, whatsappLid set to: ${oldRawLid}`);
+    }
+    
+    // If existing client has a real phone and we receive a LID, store the LID in whatsappLid
+    if (!isLidPhone(existingClient.phone) && isNonPhone && rawLid && !existingClient.whatsappLid) {
+      updateData.whatsappLid = rawLid;
+      console.log(`[AI Context] Client whatsappLid updated: ${rawLid}`);
+    }
+    
+    // Apply updates if any
+    if (Object.keys(updateData).length > 0) {
       await db.client.update({
         where: { id: existingClient.id },
-        data: { phone: normalizedPhone }
+        data: updateData
       });
-      console.log(`[AI Context] Client phone updated from identifier to real number: ${normalizedPhone}`);
     }
     
     return existingClient.id;
@@ -164,6 +209,7 @@ export async function findOrCreateClient(
         accountId,
         name: displayName,
         phone: phoneForDb,
+        whatsappLid: rawLid || null,
         whatsappPushName: pushName || null,
         notes: pushName 
           ? `Nome do perfil WhatsApp: ${pushName}${isNonPhone ? ' (telefone ainda não identificado)' : ''}` 
@@ -173,18 +219,27 @@ export async function findOrCreateClient(
         lastAiInteraction: new Date(),
       }
     });
-    console.log(`[AI Context] New client created: ${newClient.id} (${displayName}) for account ${accountId}${isNonPhone ? ' [non-phone session]' : ''}`);
+    console.log(`[AI Context] New client created: ${newClient.id} (${displayName}) for account ${accountId}${isNonPhone ? ' [non-phone session]' : ''}${rawLid ? ` whatsappLid=${rawLid}` : ''}`);
     return newClient.id;
   } catch (error: any) {
     // Handle race condition: unique constraint violation (P2002)
     if (error?.code === 'P2002') {
       // Another request created the client concurrently - find it
-      const concurrentClient = await db.client.findFirst({
+      // Try to find by phone first, then by whatsappLid
+      let concurrentClient = await db.client.findFirst({
         where: {
           accountId,
           phone: { contains: searchContains }
         }
       });
+      if (!concurrentClient && rawLid) {
+        concurrentClient = await db.client.findFirst({
+          where: {
+            accountId,
+            whatsappLid: rawLid
+          }
+        });
+      }
       if (concurrentClient) {
         if (pushName && !concurrentClient.whatsappPushName) {
           await db.client.update({
@@ -533,13 +588,25 @@ export async function getClientContext(
   accountId: string
 ): Promise<ClientContext | null> {
   const normalizedPhone = clientPhone.replace(/\D/g, '');
+  const rawLid = extractRawLid(clientPhone);
   
-  const client = await db.client.findFirst({
+  // Search by phone, and also by whatsappLid for LID-based clients
+  let client = await db.client.findFirst({
     where: {
       accountId,
-      phone: { contains: normalizedPhone.slice(-9) }
+      phone: { contains: isLidPhone(clientPhone) ? clientPhone : normalizedPhone.slice(-9) }
     }
   });
+  
+  // If not found by phone and we have a raw LID, search by whatsappLid
+  if (!client && rawLid) {
+    client = await db.client.findFirst({
+      where: {
+        accountId,
+        whatsappLid: rawLid
+      }
+    });
+  }
   
   if (!client) {
     return null;
@@ -650,6 +717,7 @@ export async function getClientContext(
     id: client.id,
     name: client.name || 'Cliente',
     phone: client.phone,
+    whatsappLid: client.whatsappLid || null,
     email: client.email,
     cpf: client.cpf,
     birthDate: client.birthDate || null,
@@ -800,10 +868,15 @@ export async function generateSystemPrompt(
       ? { pix: 'PIX', credit_card: 'Cartão de Crédito/Débito', debit_card: 'Cartão de Débito', cash: 'Dinheiro', in_person: 'Presencialmente' }[client.paymentPreference] || client.paymentPreference
       : null;
     
+    // Determine phone display for AI context
+    const phoneDisplay = isLidPhone(client.phone) ? '[pendente]' : client.phone;
+    const hasUnresolvedLid = isLidPhone(client.phone);
+    
     clientContext = `
 CONTEXTO DO CLIENTE (USE ISSO!):
 - Nome: ${client.name}
-- Telefone: ${client.phone}
+- Telefone: ${phoneDisplay}
+${hasUnresolvedLid ? '- ⚠️ O telefone deste cliente ainda não foi identificado. Quando possível, pergunte o telefone.' : ''}
 ${client.whatsappPushName && client.whatsappPushName !== client.name ? `- Nome no WhatsApp: ${client.whatsappPushName}` : ''}
 - Total de visitas: ${client.totalAppointments}
 - Última visita: ${client.lastVisit ? formatDate(client.lastVisit) : 'Primeira vez'}
@@ -829,6 +902,7 @@ IMPORTANTE:
 - Se o cliente fornecer o nome, diga "Vou anotar seu nome!" e informe que o nome foi registrado.
 - Se a preferência de pagamento não foi informada e o cliente vai agendar, PERGUNTE como prefere pagar (PIX/cartão online ou presencialmente no dia).
 - Se o cliente escolher PIX e NÃO TEM CPF cadastrado, PERGUNTE o CPF! Diga: "Para pagamento via PIX, preciso do seu CPF. Pode informar?" O CPF é necessário para gerar o pagamento.
+${hasUnresolvedLid ? '- O telefone deste cliente não foi identificado ainda. Tente obter o telefone dele durante a conversa de forma natural, perguntando algo como "Para facilitar seu cadastro, qual é seu telefone?"' : ''}
 ${client.daysSinceLastVisit && client.daysSinceLastVisit > 21 ? `- Faz mais de 3 semanas que ${client.name} não vem! Sugira agendar um retorno de forma carinhosa.` : ''}
 `;
   } else {

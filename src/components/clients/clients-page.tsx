@@ -71,6 +71,7 @@ interface Client {
   id: string
   name: string
   phone: string
+  whatsappLid: string | null
   email: string | null
   cpf: string | null
   birthDate: string | null
@@ -104,9 +105,25 @@ function formatCpf(cpf: string | null): string {
   return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6, 9)}-${digits.slice(9, 11)}`
 }
 
+// Helper: check if phone is a LID/JID identifier
+function isLidPhone(phone: string): boolean {
+  return phone.startsWith('lid:') || phone.startsWith('jid:')
+}
+
 // Helper: format phone (XX) XXXXX-XXXX
 function formatPhone(phone: string): string {
+  // Handle LID/JID identifiers - show user-friendly message
+  if (isLidPhone(phone)) {
+    return 'Telefone pendente'
+  }
   const digits = phone.replace(/\D/g, '')
+  // Handle numbers with country code (55 + 10-11 digits = 12-13 digits total)
+  if (digits.length === 13 && digits.startsWith('55')) {
+    return `(${digits.slice(2, 4)}) ${digits.slice(4, 9)}-${digits.slice(9, 13)}`
+  }
+  if (digits.length === 12 && digits.startsWith('55')) {
+    return `(${digits.slice(2, 4)}) ${digits.slice(4, 8)}-${digits.slice(8, 12)}`
+  }
   if (digits.length === 11) {
     return `(${digits.slice(0, 2)}) ${digits.slice(2, 7)}-${digits.slice(7, 11)}`
   }
@@ -208,6 +225,7 @@ export function ClientsPage() {
         id: client.id,
         name: client.name,
         phone: client.phone,
+        whatsappLid: client.whatsappLid || null,
         email: client.email,
         cpf: client.cpf,
         birthDate: client.birthDate,
@@ -292,14 +310,15 @@ export function ClientsPage() {
     
     // Generate CSV content with all fields
     const headers = [
-      'Nome', 'Telefone', 'Email', 'CPF', 'Data de Nascimento',
+      'Nome', 'Telefone', 'Telefone Pendente', 'Email', 'CPF', 'Data de Nascimento',
       'Preferência de Pagamento', 'Pontos Fidelidade',
       'Agendamentos', 'No-Shows', 'Score Risco',
       'Última Visita', 'Nome WhatsApp', 'Observações', 'Notas IA'
     ]
     const rows = clientsToExport.map(c => [
       c.name,
-      formatPhone(c.phone),
+      isLidPhone(c.phone) ? '' : formatPhone(c.phone),
+      isLidPhone(c.phone) ? 'Sim - telefone não identificado pelo WhatsApp' : 'Não',
       c.email || '',
       formatCpf(c.cpf),
       formatDate(c.birthDate),
@@ -331,8 +350,14 @@ export function ClientsPage() {
   }
 
   const handleWhatsAppMessage = (phone: string) => {
-    const cleanPhone = phone.replace(/\D/g, '')
-    window.open(`https://wa.me/55${cleanPhone}`, '_blank')
+    if (isLidPhone(phone)) {
+      toast.error('Telefone não identificado. Aguarde a resolução automática do WhatsApp.')
+      return
+    }
+    const digits = phone.replace(/\D/g, '')
+    // If already has country code, use as-is; otherwise add 55
+    const phoneWithCountryCode = digits.startsWith('55') ? digits : `55${digits}`
+    window.open(`https://wa.me/${phoneWithCountryCode}`, '_blank')
   }
 
   const handleBulkWhatsApp = () => {
@@ -340,17 +365,28 @@ export function ClientsPage() {
       ? clients.filter(c => selectedClients.includes(c.id))
       : filteredClients
     
-    if (clientsToMessage.length > 5) {
+    // Filter out clients with unresolved LID phones
+    const validClients = clientsToMessage.filter(c => !isLidPhone(c.phone))
+    const skippedCount = clientsToMessage.length - validClients.length
+    
+    if (validClients.length > 5) {
       toast.error('Selecione no máximo 5 clientes para envio em massa')
       return
     }
     
-    clientsToMessage.forEach(client => {
-      const cleanPhone = client.phone.replace(/\D/g, '')
-      window.open(`https://wa.me/55${cleanPhone}`, '_blank')
+    if (skippedCount > 0) {
+      toast.info(`${skippedCount} cliente(s) com telefone pendente foram pulados`)
+    }
+    
+    validClients.forEach(client => {
+      const digits = client.phone.replace(/\D/g, '')
+      const phoneWithCountryCode = digits.startsWith('55') ? digits : `55${digits}`
+      window.open(`https://wa.me/${phoneWithCountryCode}`, '_blank')
     })
     
-    toast.success(`Abrindo WhatsApp para ${clientsToMessage.length} clientes`)
+    if (validClients.length > 0) {
+      toast.success(`Abrindo WhatsApp para ${validClients.length} clientes`)
+    }
   }
 
   const handleOpenDialog = useCallback((client?: Client) => {
@@ -916,8 +952,11 @@ export function ClientsPage() {
                             <div className="min-w-0">
                               <p className="font-medium truncate max-w-44">{client.name}</p>
                               <div className="flex items-center gap-1 text-xs text-muted-foreground">
-                                <Phone className="w-3 h-3 flex-shrink-0" />
-                                <span className="truncate">{formatPhone(client.phone)}</span>
+                                <Phone className={cn("w-3 h-3 flex-shrink-0", isLidPhone(client.phone) && "text-amber-500")} />
+                                <span className={cn("truncate", isLidPhone(client.phone) && "text-amber-600 italic")}>{formatPhone(client.phone)}</span>
+                                {isLidPhone(client.phone) && (
+                                  <Badge variant="outline" className="text-[9px] bg-amber-50 dark:bg-amber-900/20 text-amber-600 border-amber-200 dark:border-amber-800 px-1 py-0 ml-0.5">LID</Badge>
+                                )}
                               </div>
                               {client.email && (
                                 <div className="flex items-center gap-1 text-xs text-muted-foreground">
@@ -1048,14 +1087,20 @@ export function ClientsPage() {
                                   <Button
                                     variant="ghost"
                                     size="icon"
-                                    className="h-8 w-8 text-green-600 hover:text-green-700 hover:bg-green-100 dark:hover:bg-green-900/30"
+                                    className={cn(
+                                      "h-8 w-8",
+                                      isLidPhone(client.phone) 
+                                        ? "text-amber-400 hover:text-amber-500 hover:bg-amber-100 dark:hover:bg-amber-900/30" 
+                                        : "text-green-600 hover:text-green-700 hover:bg-green-100 dark:hover:bg-green-900/30"
+                                    )}
                                     onClick={() => handleWhatsAppMessage(client.phone)}
+                                    disabled={isLidPhone(client.phone)}
                                   >
                                     <MessageSquare className="w-4 h-4" />
                                   </Button>
                                 </TooltipTrigger>
                                 <TooltipContent>
-                                  <p>Enviar WhatsApp</p>
+                                  <p>{isLidPhone(client.phone) ? 'Telefone pendente (LID não resolvido)' : 'Enviar WhatsApp'}</p>
                                 </TooltipContent>
                               </Tooltip>
                             </TooltipProvider>

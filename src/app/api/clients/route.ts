@@ -78,7 +78,7 @@ export async function POST(request: NextRequest) {
 export async function PUT(request: NextRequest) {
   try {
     const body = await request.json()
-    const { id, name, phone, email, notes, cpf, birthDate, paymentPreference, loyaltyPoints } = body
+    const { id, name, phone, email, notes, cpf, birthDate, paymentPreference, loyaltyPoints, whatsappLid } = body
 
     if (!id) {
       return NextResponse.json({ error: 'Client ID required' }, { status: 400 })
@@ -93,6 +93,7 @@ export async function PUT(request: NextRequest) {
     if (birthDate !== undefined) updateData.birthDate = birthDate ? new Date(birthDate) : null
     if (paymentPreference !== undefined) updateData.paymentPreference = paymentPreference || null
     if (loyaltyPoints !== undefined) updateData.loyaltyPoints = loyaltyPoints
+    if (whatsappLid !== undefined) updateData.whatsappLid = whatsappLid || null
 
     const client = await db.client.update({
       where: { id },

@@ -3,6 +3,7 @@ import { db } from '@/lib/db';
 import { generateChatCompletion, canAccountUseAI, transcribeAudioBase64, type ChatMessage } from '@/lib/ai-provider-service';
 import { generateSystemPrompt, findOrCreateClient, detectNameInMessage, updateClientName, detectPaymentPreference, updateClientPaymentPreference, detectCpfInMessage, updateClientCpf, updateServiceHistory, detectBirthDateInMessage, updateClientBirthDate } from '@/lib/ai-context-service';
 import { decryptCredentials } from '@/app/api/integrations/route';
+import { getEvolutionApiConfig, isValidPhoneNumber, isLidIdentifier, isJidIdentifier, isNonPhoneIdentifier, resolveLidToPhone, saveLidMapping, findAccountByInstance, setCachedLidPhone } from '@/lib/lid-resolution';
 
 /**
  * In-memory processing lock to prevent duplicate AI responses.
@@ -121,25 +122,7 @@ async function verifyWebhookRequest(request: NextRequest): Promise<boolean> {
   return false;
 }
 
-/**
- * Get Evolution API configuration from environment variables or database
- */
-async function getEvolutionApiConfig(): Promise<{ apiUrl: string; apiKey: string } | null> {
-  const envApiUrl = process.env.EVOLUTION_API_URL;
-  const envApiKey = process.env.EVOLUTION_API_KEY;
-
-  if (envApiUrl && envApiKey) {
-    return { apiUrl: envApiUrl, apiKey: envApiKey };
-  }
-
-  const systemConfig = await db.systemConfiguration.findFirst();
-  
-  if (systemConfig?.evolutionApiUrl && systemConfig?.evolutionApiKey) {
-    return { apiUrl: systemConfig.evolutionApiUrl, apiKey: systemConfig.evolutionApiKey };
-  }
-
-  return null;
-}
+// getEvolutionApiConfig is imported from @/lib/lid-resolution
 
 /**
  * Send a WhatsApp message directly to a JID (works with LID addresses)
@@ -579,415 +562,16 @@ function extractPhoneFromJid(jid: string | undefined): string | null {
   return null;
 }
 
-/**
- * Check if a phone value is a LID identifier (not a real phone number)
- */
-function isLidIdentifier(phone: string): boolean {
-  return phone.startsWith('lid:');
-}
+// isLidIdentifier is imported from @/lib/lid-resolution
 
-/**
- * Check if a phone value is a JID-based identifier (not a real phone number)
- * Used when neither a real phone nor a LID could be extracted
- */
-function isJidIdentifier(phone: string): boolean {
-  return phone.startsWith('jid:');
-}
+// isJidIdentifier is imported from @/lib/lid-resolution
 
-/**
- * Check if a phone value is any kind of non-real-phone identifier (LID or JID)
- */
-function isNonPhoneIdentifier(phone: string): boolean {
-  return isLidIdentifier(phone) || isJidIdentifier(phone);
-}
+// isNonPhoneIdentifier is imported from @/lib/lid-resolution
 
-/**
- * Validate that a number looks like a real phone number (not a LID-derived number)
- * Brazilian numbers: 12-13 digits starting with 55 (country code)
- * Local Brazilian: 10-11 digits (area code + number)
- * International: 8-15 digits with valid country code prefix
- * 
- * LID-derived numbers are typically 15 digits and DON'T start with valid
- * country/area codes. For example, 147102780940432 (15 digits, starts with
- * 14 which is not a valid Brazilian area code pattern).
- */
-function isValidPhoneNumber(phone: string): boolean {
-  const digits = phone.replace(/\D/g, '');
-  
-  // Too short or too long for any phone number
-  if (digits.length < 10 || digits.length > 15) return false;
-  
-  // Brazilian number with country code: 55XX9XXXXXXXX (12-13 digits)
-  if (digits.startsWith('55')) {
-    const localPart = digits.slice(2); // Remove 55 country code
-    // Valid Brazilian area codes: 11-99 (two digits)
-    const areaCode = localPart.slice(0, 2);
-    if (/^[1-9][0-9]$/.test(areaCode)) {
-      // After area code: 8-9 digits (mobile with 9th digit, or landline 8 digits)
-      const subscriberNumber = localPart.slice(2);
-      if (subscriberNumber.length >= 8 && subscriberNumber.length <= 9) {
-        return true;
-      }
-    }
-    // Some numbers might have fewer digits but still valid
-    if (localPart.length >= 8 && localPart.length <= 11) return true;
-  }
-  
-  // Local Brazilian format without country code: XX9XXXXXXXX (10-11 digits)
-  if (digits.length >= 10 && digits.length <= 11) {
-    const areaCode = digits.slice(0, 2);
-    if (/^[1-9][0-9]$/.test(areaCode)) {
-      return true;
-    }
-  }
-  
-  // Other international numbers (not Brazilian): more lenient check
-  // But still reject numbers that look like LID-derived values
-  // LID numbers are typically 15 digits with no valid country code pattern
-  if (digits.length === 15 && !digits.startsWith('55')) {
-    // Very likely a LID-derived number, not a real phone
-    // Real 15-digit international numbers are rare
-    return false;
-  }
-  
-  // For other lengths, check if it has a reasonable structure
-  // Must start with 1-9 (no leading zeros in phone numbers)
-  if (/^[1-9]/.test(digits)) {
-    return true;
-  }
-  
-  return false;
-}
+// isValidPhoneNumber is imported from @/lib/lid-resolution
 
-/**
- * Cache for LID → phone number mappings (in-memory, persists across requests)
- * Prevents repeated API calls for the same LID
- */
-const lidPhoneCache = new Map<string, { phone: string; timestamp: number }>();
-const LID_CACHE_TTL = 30 * 60 * 1000; // 30 minutes
-
-/**
- * Get cached phone number for a LID identifier
- */
-function getCachedLidPhone(lidIdentifier: string): string | null {
-  const cached = lidPhoneCache.get(lidIdentifier);
-  if (cached && (Date.now() - cached.timestamp) < LID_CACHE_TTL) {
-    return cached.phone;
-  }
-  if (cached) {
-    lidPhoneCache.delete(lidIdentifier); // Expired
-  }
-  return null;
-}
-
-/**
- * Cache a LID → phone number mapping
- */
-function setCachedLidPhone(lidIdentifier: string, phone: string): void {
-  lidPhoneCache.set(lidIdentifier, { phone, timestamp: Date.now() });
-  // Cleanup old entries if cache gets too large
-  if (lidPhoneCache.size > 1000) {
-    const now = Date.now();
-    for (const [key, value] of lidPhoneCache.entries()) {
-      if (now - value.timestamp > LID_CACHE_TTL) {
-        lidPhoneCache.delete(key);
-      }
-    }
-  }
-}
-
-/**
- * Resolve a LID identifier to an actual phone number using Evolution API
- * Uses multiple methods to resolve the contact's real phone number.
- * 
- * IMPORTANT: Returns ONLY validated phone numbers that pass isValidPhoneNumber().
- * LID-derived digit strings (e.g., 147102780940432) are NOT returned.
- */
-async function resolveLidToPhone(
-  instanceName: string,
-  lidIdentifier: string
-): Promise<string | null> {
-  try {
-    // Check in-memory cache first
-    const cached = getCachedLidPhone(lidIdentifier);
-    if (cached) {
-      console.log(`[Webhook] LID resolved from cache: ${lidIdentifier} → ${cached}`);
-      return cached;
-    }
-
-    const systemConfig = await getEvolutionApiConfig();
-    if (!systemConfig) {
-      console.log('[Webhook] Cannot resolve LID: Evolution API not configured');
-      return null;
-    }
-
-    const lidValue = lidIdentifier.replace('lid:', '');
-    const lidJid = `${lidValue}@lid`;
-
-    console.log(`[Webhook] Attempting to resolve LID: ${lidJid}`);
-
-    // Method 1: Use fetchPhoneNumber endpoint (specifically designed for LID resolution)
-    try {
-      const response = await fetch(
-        `${systemConfig.apiUrl}/chat/fetchPhoneNumber/${instanceName}`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'apikey': systemConfig.apiKey,
-          },
-          body: JSON.stringify({
-            where: {
-              lidJid: lidJid
-            }
-          })
-        }
-      );
-
-      if (response.ok) {
-        const data = await response.json();
-        // The response may have the phone in different fields depending on Evolution API version
-        const candidates = [
-          data?.phoneNumber,
-          data?.phone,
-          data?.number,
-          data?.jid?.split('@')[0],
-          data?.id?.split('@')[0],
-        ].filter(Boolean);
-        
-        for (const candidate of candidates) {
-          if (isValidPhoneNumber(candidate) && !candidate.includes(lidValue)) {
-            console.log(`[Webhook] LID resolved via fetchPhoneNumber to: ${candidate}`);
-            setCachedLidPhone(lidIdentifier, candidate);
-            return candidate;
-          }
-        }
-        
-        // Log what we got for debugging
-        console.log(`[Webhook] fetchPhoneNumber returned data but no valid phone: ${JSON.stringify(data).substring(0, 200)}`);
-      }
-    } catch (err) {
-      console.log('[Webhook] fetchPhoneNumber endpoint failed, trying alternative:', err);
-    }
-
-    // Method 2: Try getBaseProfile endpoint
-    try {
-      const response = await fetch(
-        `${systemConfig.apiUrl}/chat/getBaseProfile/${instanceName}?jid=${encodeURIComponent(lidJid)}`,
-        {
-          method: 'GET',
-          headers: {
-            'apikey': systemConfig.apiKey,
-          },
-        }
-      );
-
-      if (response.ok) {
-        const data = await response.json();
-        const candidates = [
-          data?.id?.split('@')[0],
-          data?.jid?.split('@')[0],
-          data?.phoneNumber,
-          data?.number,
-        ].filter(Boolean);
-        
-        for (const candidate of candidates) {
-          if (isValidPhoneNumber(candidate) && !candidate.includes(lidValue)) {
-            console.log(`[Webhook] LID resolved via getBaseProfile to: ${candidate}`);
-            setCachedLidPhone(lidIdentifier, candidate);
-            return candidate;
-          }
-        }
-        
-        // If we got a @s.whatsapp.net JID, that's the real phone number
-        const realJid = data?.id || data?.jid || '';
-        if (realJid.includes('@s.whatsapp.net')) {
-          const phoneFromJid = realJid.split('@')[0];
-          if (isValidPhoneNumber(phoneFromJid)) {
-            console.log(`[Webhook] LID resolved via getBaseProfile JID to: ${phoneFromJid}`);
-            setCachedLidPhone(lidIdentifier, phoneFromJid);
-            return phoneFromJid;
-          }
-        }
-        
-        console.log(`[Webhook] getBaseProfile returned data but no valid phone: ${JSON.stringify(data).substring(0, 200)}`);
-      }
-    } catch (err) {
-      console.log('[Webhook] getBaseProfile endpoint failed:', err);
-    }
-
-    // Method 3: Try findContacts endpoint - search for contacts with this LID
-    // Also try to find contacts that have both a LID and a real phone number
-    try {
-      const response = await fetch(
-        `${systemConfig.apiUrl}/chat/findContacts/${instanceName}`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'apikey': systemConfig.apiKey,
-          },
-          body: JSON.stringify({
-            where: {
-              id: lidJid
-            }
-          })
-        }
-      );
-
-      if (response.ok) {
-        const data = await response.json();
-        const contacts = Array.isArray(data) ? data : [data];
-        for (const contact of contacts) {
-          // Check if the contact has a real @s.whatsapp.net JID (not just @lid)
-          const contactId = contact?.id || contact?.jid || '';
-          
-          // Skip if this is just the same LID JID
-          if (contactId.includes('@lid')) continue;
-          
-          // If it's a real @s.whatsapp.net JID, extract the phone
-          if (contactId.includes('@s.whatsapp.net')) {
-            const phoneFromJid = contactId.split('@')[0];
-            if (isValidPhoneNumber(phoneFromJid)) {
-              console.log(`[Webhook] LID resolved via findContacts (s.whatsapp.net) to: ${phoneFromJid}`);
-              setCachedLidPhone(lidIdentifier, phoneFromJid);
-              return phoneFromJid;
-            }
-          }
-          
-          // Check other fields for phone numbers
-          const phoneCandidates = [
-            contact?.phoneNumber,
-            contact?.number,
-            contact?.phone,
-          ].filter(Boolean);
-          
-          for (const candidate of phoneCandidates) {
-            if (isValidPhoneNumber(String(candidate))) {
-              console.log(`[Webhook] LID resolved via findContacts (phone field) to: ${candidate}`);
-              setCachedLidPhone(lidIdentifier, String(candidate));
-              return String(candidate);
-            }
-          }
-        }
-      }
-    } catch (err) {
-      console.log('[Webhook] findContacts endpoint failed:', err);
-    }
-
-    // Method 4: Try getContactProfile - some Evolution API versions support this
-    try {
-      const response = await fetch(
-        `${systemConfig.apiUrl}/chat/getContactProfile/${instanceName}?jid=${encodeURIComponent(lidJid)}`,
-        {
-          method: 'GET',
-          headers: {
-            'apikey': systemConfig.apiKey,
-          },
-        }
-      );
-
-      if (response.ok) {
-        const data = await response.json();
-        // Check for real phone number in the response
-        const candidates = [
-          data?.id?.split('@')[0],
-          data?.jid?.split('@')[0],
-          data?.phoneNumber,
-          data?.number,
-        ].filter(Boolean);
-        
-        for (const candidate of candidates) {
-          if (isValidPhoneNumber(candidate) && !candidate.includes(lidValue)) {
-            console.log(`[Webhook] LID resolved via getContactProfile to: ${candidate}`);
-            setCachedLidPhone(lidIdentifier, candidate);
-            return candidate;
-          }
-        }
-        
-        // Check if response has a realJid or lidToJid field
-        const realJid = data?.realJid || data?.lidToJid || '';
-        if (realJid.includes('@s.whatsapp.net')) {
-          const phoneFromJid = realJid.split('@')[0];
-          if (isValidPhoneNumber(phoneFromJid)) {
-            console.log(`[Webhook] LID resolved via getContactProfile realJid to: ${phoneFromJid}`);
-            setCachedLidPhone(lidIdentifier, phoneFromJid);
-            return phoneFromJid;
-          }
-        }
-      }
-    } catch (err) {
-      console.log('[Webhook] getContactProfile endpoint failed:', err);
-    }
-
-    // Method 5: Try fetchContacts - get all contacts and search by matching LID
-    // This is more expensive but may find contacts with both LID and phone number
-    try {
-      const response = await fetch(
-        `${systemConfig.apiUrl}/chat/fetchContacts/${instanceName}`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'apikey': systemConfig.apiKey,
-          },
-          body: JSON.stringify({
-            where: {
-              lidJid: lidJid
-            }
-          })
-        }
-      );
-
-      if (response.ok) {
-        const data = await response.json();
-        const contacts = Array.isArray(data) ? data : [data];
-        
-        for (const contact of contacts) {
-          const contactId = contact?.id || '';
-          // Look for contacts that have a @s.whatsapp.net JID paired with this LID
-          if (contactId.includes('@s.whatsapp.net')) {
-            const phoneFromJid = contactId.split('@')[0];
-            if (isValidPhoneNumber(phoneFromJid)) {
-              console.log(`[Webhook] LID resolved via fetchContacts to: ${phoneFromJid}`);
-              setCachedLidPhone(lidIdentifier, phoneFromJid);
-              return phoneFromJid;
-            }
-          }
-        }
-      }
-    } catch (err) {
-      console.log('[Webhook] fetchContacts endpoint failed:', err);
-    }
-
-    console.log(`[Webhook] ❌ Could not resolve LID ${lidJid} to a valid phone number`);
-    return null;
-  } catch (error) {
-    console.error('[Webhook] Error resolving LID:', error);
-    return null;
-  }
-}
-
-/**
- * Find account by instance name
- */
-async function findAccountByInstance(instanceName: string): Promise<string | null> {
-  const integrations = await db.integration.findMany({
-    where: { type: 'whatsapp', credentials: { contains: instanceName } }
-  });
-
-  for (const integration of integrations) {
-    const credentials = typeof integration.credentials === 'string'
-      ? JSON.parse(integration.credentials)
-      : integration.credentials;
-
-    if (credentials.instanceName === instanceName) {
-      return integration.accountId;
-    }
-  }
-
-  return null;
-}
+// lidPhoneCache, getCachedLidPhone, setCachedLidPhone are inside @/lib/lid-resolution
+// saveLidMapping, resolveLidToPhone, findAccountByInstance are imported from @/lib/lid-resolution
 
 interface EvolutionWebhookData {
   event: string;
@@ -1255,6 +839,65 @@ async function processIncomingMessage(
   // AUTO-CREATE CLIENT: Find or create client with phone number
   const pushName = data.pushName || undefined;
   const clientId = await findOrCreateClient(accountId, phone, pushName);
+
+  // UPDATE CLIENT LID INFO: If we have a LID (from the original JID), update the Client record
+  // This handles both resolved and unresolved LIDs, and migrates existing lid:XXX phone entries
+  try {
+    const lidFromJid = data.key?.remoteJid?.includes('@lid')
+      ? data.key?.remoteJid?.split('@')[0] || null
+      : null;
+
+    if (lidFromJid) {
+      // Fetch the current client state to check for migration needs
+      const currentClient = await db.client.findUnique({
+        where: { id: clientId },
+        select: { phone: true, whatsappLid: true }
+      });
+
+      if (currentClient) {
+        const phoneWasLidPlaceholder = currentClient.phone.startsWith('lid:');
+        const phoneIsNowResolved = !isNonPhoneIdentifier(phone);
+
+        if (phoneIsNowResolved && phoneWasLidPlaceholder) {
+          // MIGRATION: Client was stored with lid:XXX as phone, but we now have a real phone.
+          // Update both whatsappLid and phone fields.
+          await db.client.update({
+            where: { id: clientId },
+            data: {
+              whatsappLid: lidFromJid,
+              phone: phone.replace(/\D/g, ''), // Store clean phone number
+            }
+          });
+          console.log(`[Webhook] 🔄 Migrated client ${clientId}: phone from "${currentClient.phone}" to "${phone.replace(/\D/g, '')}", whatsappLid set to "${lidFromJid}"`);
+        } else if (phoneIsNowResolved && !phoneWasLidPlaceholder) {
+          // Phone was already a real number, just set the whatsappLid if not already set
+          if (!currentClient.whatsappLid) {
+            await db.client.update({
+              where: { id: clientId },
+              data: { whatsappLid: lidFromJid }
+            });
+            console.log(`[Webhook] 📝 Set whatsappLid="${lidFromJid}" for client ${clientId} (phone already: ${currentClient.phone})`);
+          }
+        } else if (!phoneIsNowResolved && isLidIdentifier(phone)) {
+          // Phone is still a LID identifier - store the LID value in whatsappLid
+          // Keep the lid:XXX placeholder in phone for backward compatibility
+          if (!currentClient.whatsappLid) {
+            await db.client.update({
+              where: { id: clientId },
+              data: { whatsappLid: lidFromJid }
+            });
+            console.log(`[Webhook] 📝 Set whatsappLid="${lidFromJid}" for client ${clientId} (phone still LID: ${phone})`);
+          }
+          
+          // Also create/update a pending LidMapping record for future retry
+          await saveLidMapping(lidFromJid, `${lidFromJid}@lid`, instanceName);
+        }
+      }
+    }
+  } catch (lidUpdateError) {
+    console.error(`[Webhook] Error updating client LID info: ${lidUpdateError instanceof Error ? lidUpdateError.message : lidUpdateError}`);
+    // Don't block message processing if LID update fails
+  }
 
   // DETECT NAME: Check if user is providing their name
   const detectedName = detectNameInMessage(messageText);
@@ -2150,7 +1793,50 @@ async function processMessageWithAI(
 
     // Generate AI response with full context
     console.log(`[Webhook] 🤖 Generating AI response for phone: ${phoneForContext}...`);
-    const rawResponse = await generateAIResponse(accountId, phoneForContext, message);
+    let rawResponse = await generateAIResponse(accountId, phoneForContext, message);
+    
+    // If the client has an unresolved LID (phone starts with lid:), add a note to the AI context
+    // suggesting the AI should ask the client for their phone number.
+    // This helps capture real phone numbers for future contact and booking.
+    if (rawResponse && isLidIdentifier(phone) && isNonPhoneIdentifier(phoneForSending)) {
+      try {
+        // Check if the client's phone is still a LID placeholder
+        const clientRecord = await db.client.findUnique({
+          where: { id: clientId },
+          select: { phone: true }
+        });
+        
+        if (clientRecord && clientRecord.phone.startsWith('lid:')) {
+          // Only add the phone request note if the AI hasn't already asked for it recently
+          // Check last 5 outgoing messages for phone request patterns
+          const recentOutgoing = await db.whatsappMessage.findMany({
+            where: {
+              accountId,
+              clientPhone: { in: [phone, phoneForContext] },
+              direction: 'outgoing',
+            },
+            orderBy: { createdAt: 'desc' },
+            take: 5,
+            select: { message: true }
+          });
+          
+          const alreadyAskedForPhone = recentOutgoing.some(msg => 
+            /n(ú|u)mero de (telefone|celular|whatsapp)|seu telefone|seu n(ú|u)mero|qual (é )?o seu (telefone|n(ú|u)mero|celular|whatsapp)/i.test(msg.message || '')
+          );
+          
+          if (!alreadyAskedForPhone) {
+            // Append a gentle prompt for the client's phone number
+            rawResponse += '\n\n📱 *Dica:* Para facilitar seus próximos agendamentos, poderia me informar seu número de telefone? Assim posso te enviar lembretes e confirmações! 😊';
+            console.log(`[Webhook] 📝 Added phone number request note for unresolved LID client ${clientId}`);
+          } else {
+            console.log(`[Webhook] 📝 Skipped phone number request - already asked in recent messages for client ${clientId}`);
+          }
+        }
+      } catch (phoneNoteError) {
+        console.error(`[Webhook] Error checking/adding phone number note: ${phoneNoteError instanceof Error ? phoneNoteError.message : phoneNoteError}`);
+        // Don't modify the response if the check fails
+      }
+    }
 
     if (rawResponse) {
       // Parse booking command from AI response

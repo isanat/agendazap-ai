@@ -33,6 +33,20 @@ const globalForPrisma = globalThis as unknown as {
   prisma: PrismaClient | undefined
 }
 
+// Always create a new PrismaClient to pick up schema changes
+// In development, the global cache can become stale after prisma generate
+if (process.env.NODE_ENV !== 'production' && globalForPrisma.prisma) {
+  try {
+    // Test if the cached client has the latest models
+    if (!(globalForPrisma.prisma as any).lidMapping) {
+      console.log('[db.ts] Cached PrismaClient missing models, creating fresh instance')
+      globalForPrisma.prisma = undefined
+    }
+  } catch {
+    globalForPrisma.prisma = undefined
+  }
+}
+
 export const db =
   globalForPrisma.prisma ??
   new PrismaClient({
