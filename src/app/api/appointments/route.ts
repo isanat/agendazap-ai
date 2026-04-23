@@ -8,8 +8,9 @@ import { getAuthUser } from '@/lib/auth-helpers'
  * 1. An authenticated user via getAuthUser (JWT cookie or auth headers)
  * 2. An internal system call with x-internal-secret header matching INTERNAL_API_SECRET env var
  *    (used by webhooks and other internal services that create appointments programmatically)
+ * 3. Fallback: x-account-id header (same auth level as clients/services/professionals APIs)
  */
-async function verifyAppointmentAuth(request: NextRequest): Promise<{ authorized: boolean; authUser?: Awaited<ReturnType<typeof getAuthUser>> }> {
+async function verifyAppointmentAuth(request: NextRequest): Promise<{ authorized: boolean; authUser?: Awaited<ReturnType<typeof getAuthUser>>; accountId?: string }> {
   // Method 1: Check for internal system secret (for webhook/internal calls)
   const internalSecret = request.headers.get('x-internal-secret')
   if (internalSecret) {
@@ -26,6 +27,19 @@ async function verifyAppointmentAuth(request: NextRequest): Promise<{ authorized
   const authUser = await getAuthUser(request)
   if (authUser) {
     return { authorized: true, authUser }
+  }
+
+  // Method 3: Fallback - check x-account-id header (same auth level as clients/services APIs)
+  const accountId = request.headers.get('x-account-id') || new URL(request.url).searchParams.get('accountId')
+  if (accountId) {
+    // Verify the account actually exists
+    const account = await db.account.findUnique({
+      where: { id: accountId },
+      select: { id: true }
+    })
+    if (account) {
+      return { authorized: true, accountId }
+    }
   }
 
   return { authorized: false }
@@ -151,13 +165,13 @@ async function createPixPayment(
 export async function GET(request: NextRequest) {
   try {
     // Verify authentication
-    const { authorized, authUser } = await verifyAppointmentAuth(request)
+    const { authorized, authUser, accountId: authAccountId } = await verifyAppointmentAuth(request)
     if (!authorized) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
     const { searchParams } = new URL(request.url)
-    const accountId = searchParams.get('accountId')
+    let accountId = searchParams.get('accountId') || authAccountId || ''
     const date = searchParams.get('date')
     const status = searchParams.get('status')
     const professionalId = searchParams.get('professionalId')
@@ -173,6 +187,7 @@ export async function GET(request: NextRequest) {
         return NextResponse.json({ error: 'Forbidden - no access to this account' }, { status: 403 })
       }
     }
+    // If authenticated via x-account-id header (no authUser), the accountId itself serves as authorization
 
     const where: any = { accountId }
     
@@ -226,13 +241,13 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     // Verify authentication
-    const { authorized, authUser } = await verifyAppointmentAuth(request)
+    const { authorized, authUser, accountId: authAccountId } = await verifyAppointmentAuth(request)
     if (!authorized) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
     const body = await request.json()
-    const { 
+    let { 
       accountId, 
       clientId, 
       serviceId, 
@@ -244,6 +259,11 @@ export async function POST(request: NextRequest) {
       generatePix
     } = body
 
+    // Fallback: use accountId from auth if not provided in body
+    if (!accountId) {
+      accountId = request.headers.get('x-account-id') || authAccountId
+    }
+
     if (!accountId || !serviceId || !professionalId || !datetime) {
       return NextResponse.json({ error: 'Missing required fields' }, { status: 400 })
     }
@@ -254,6 +274,7 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: 'Forbidden - no access to this account' }, { status: 403 })
       }
     }
+    // If authenticated via x-account-id header (no authUser), the accountId itself serves as authorization
 
     // Get service to calculate end time and check custom pricing
     const service = await db.service.findUnique({
@@ -395,7 +416,7 @@ export async function POST(request: NextRequest) {
 export async function PUT(request: NextRequest) {
   try {
     // Verify authentication
-    const { authorized, authUser } = await verifyAppointmentAuth(request)
+    const { authorized, authUser, accountId: authAccountId } = await verifyAppointmentAuth(request)
     if (!authorized) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
@@ -414,6 +435,16 @@ export async function PUT(request: NextRequest) {
         select: { accountId: true }
       })
       if (!existingAppointment || existingAppointment.accountId !== authUser.accountId) {
+        return NextResponse.json({ error: 'Forbidden - no access to this appointment' }, { status: 403 })
+      }
+    }
+    // If authenticated via x-account-id header (no authUser), verify the appointment belongs to that account
+    if (!authUser && authAccountId) {
+      const existingAppointment = await db.appointment.findUnique({
+        where: { id },
+        select: { accountId: true }
+      })
+      if (!existingAppointment || existingAppointment.accountId !== authAccountId) {
         return NextResponse.json({ error: 'Forbidden - no access to this appointment' }, { status: 403 })
       }
     }
@@ -506,7 +537,7 @@ export async function PUT(request: NextRequest) {
 export async function DELETE(request: NextRequest) {
   try {
     // Verify authentication
-    const { authorized, authUser } = await verifyAppointmentAuth(request)
+    const { authorized, authUser, accountId: authAccountId } = await verifyAppointmentAuth(request)
     if (!authorized) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
@@ -525,6 +556,16 @@ export async function DELETE(request: NextRequest) {
         select: { accountId: true }
       })
       if (!existingAppointment || existingAppointment.accountId !== authUser.accountId) {
+        return NextResponse.json({ error: 'Forbidden - no access to this appointment' }, { status: 403 })
+      }
+    }
+    // If authenticated via x-account-id header (no authUser), verify the appointment belongs to that account
+    if (!authUser && authAccountId) {
+      const existingAppointment = await db.appointment.findUnique({
+        where: { id },
+        select: { accountId: true }
+      })
+      if (!existingAppointment || existingAppointment.accountId !== authAccountId) {
         return NextResponse.json({ error: 'Forbidden - no access to this appointment' }, { status: 403 })
       }
     }

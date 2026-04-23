@@ -62,7 +62,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
-    let { accountId, name, phone, email, color, createUserAccount, userPassword, services } = body
+    let { accountId, name, phone, email, color, isActive, createUserAccount, userPassword, services } = body
 
     // Fallback: try x-account-id header from authFetch
     if (!accountId) {
@@ -130,7 +130,7 @@ export async function POST(request: NextRequest) {
         phone,
         email,
         color: color || '#10B981',
-        isActive: true,
+        isActive: isActive !== undefined ? isActive : true,
         userId: linkedUserId,
         ...(services && services.length > 0 && {
           ServiceProfessional: {

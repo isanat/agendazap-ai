@@ -109,3 +109,79 @@ Stage Summary:
 - AI now shows "Telefone: [pendente]" instead of "Telefone: lid:249541928419454"
 - AI prompts to ask for phone number when not identified
 - Client search and creation properly handle whatsappLid field
+
+---
+Task ID: 2
+Agent: full-stack-developer
+Task: Fix LID Resolution and WhatsApp Message Sending in Webhook
+
+Work Log:
+- Added `migrateClientLidToPhone` to the import statement in `/src/app/api/webhooks/evolution/route.ts`
+- Fix 1: Added LID/JID identifier check to skip Attempt 3 when `phoneForSending` is a LID/JID identifier
+  - LID digits (e.g., 147102780940432) pass the `>= 10 && <= 15` length check but are NOT phone numbers
+  - Now checks `!isLidIdentifier(phoneForSending) && !isJidIdentifier(phoneForSending)` before constructing @s.whatsapp.net JID
+  - Added descriptive log messages when skipped
+- Fix 2: Added pre-send LID resolution attempt before JID-based sending
+  - Calls `resolveLidToPhone()` again right before sending, as Evolution API may have cached contact info
+  - On successful resolution, updates `phoneForSending` and calls `migrateClientLidToPhone()` to update client record
+  - Extracts LID value before reassignment to avoid bug
+- Fix 3: Added `chat/fetchPhoneNumber` cache trigger before Attempt 1
+  - For @lid JIDs, calls fetchPhoneNumber to warm the Evolution API cache
+  - Best-effort fire-and-forget call (errors ignored)
+- Bonus fix: Applied same LID/JID check to last-resort fallback section
+  - The last-resort code at the bottom had the same bug pattern: constructing @s.whatsapp.net from LID digits
+  - Added `!isLidIdentifier(phoneForSending) && !isJidIdentifier(phoneForSending)` guard
+- Lint: 0 errors (2 pre-existing warnings unrelated to changes)
+- Dev log: No compilation errors
+
+Stage Summary:
+- Attempt 3 and last-resort fallbacks no longer try to construct @s.whatsapp.net JIDs from LID digits
+- Pre-send LID resolution gives a second chance to resolve LID before falling back to JID-based sending
+- fetchPhoneNumber cache trigger may help Evolution API resolve LIDs faster
+- Client records are automatically migrated when pre-send resolution succeeds
+
+---
+Task ID: 4
+Agent: full-stack-developer
+Task: Fix 401 Unauthorized on /api/appointments and professionals services not saving
+
+Work Log:
+- Read worklog.md and all relevant source files
+- Read `/src/app/api/appointments/route.ts` - identified `verifyAppointmentAuth` only accepts internal secret or `getAuthUser()`, no `x-account-id` fallback
+- Read `/src/lib/auth-helpers.ts` - confirmed `getAuthUser()` does DB lookups that can fail
+- Read `/src/lib/auth-fetch.ts` - confirmed frontend sends `x-account-id` header via `authFetch`
+- Read `/src/app/api/clients/route.ts` - confirmed it uses simple `x-account-id` header check (no auth issues)
+- Read `/src/components/professionals/professionals-page.tsx` - checked toggleService, formData.services, handleSave
+- Read `/src/app/api/professionals/route.ts` - found `isActive` not destructured from POST body (hardcoded to true)
+
+Fix 1: Appointments API 401 - Added x-account-id header fallback auth
+- Updated `verifyAppointmentAuth()` return type to include optional `accountId` field
+- Added Method 3: checks `x-account-id` header or `accountId` query param, verifies account exists in DB
+- Updated GET handler: uses `authAccountId` as fallback for `accountId` when query param missing
+- Updated POST handler: uses `authAccountId` as fallback for `accountId` when body missing it
+- Updated PUT handler: added access control check for x-account-id auth (verifies appointment belongs to account)
+- Updated DELETE handler: added access control check for x-account-id auth (verifies appointment belongs to account)
+- All existing auth methods preserved (internal secret, JWT/user auth)
+
+Fix 2: Professionals API - isActive field ignored in POST
+- Added `isActive` to destructured fields in POST handler
+- Changed hardcoded `isActive: true` to `isActive: isActive !== undefined ? isActive : true`
+- This ensures the frontend's "Profissional ativo" toggle is respected when creating professionals
+
+Professionals services investigation findings:
+- `toggleService()` function works correctly (adds/removes service IDs)
+- `formData.services` is properly populated when opening edit dialog
+- `handleSave()` correctly sends `services: formData.services` in both POST and PUT
+- API POST handler correctly creates `ServiceProfessional` records via nested create
+- API PUT handler correctly handles services (deleteMany + createMany with validation)
+- `fetchProfessionals()` correctly includes `ServiceProfessional` in API query and maps it
+- No bugs found in the services save/display flow - the code is correct
+
+Lint: 0 errors (2 pre-existing warnings unrelated to changes)
+Dev log: No compilation errors
+
+Stage Summary:
+- Appointments API now accepts x-account-id header auth (consistent with clients/services/professionals APIs)
+- 401 errors on /api/appointments should be resolved for valid authenticated requests
+- Professionals POST now respects the isActive field from the frontend form
+- PUT/DELETE handlers have proper access control for both user auth and x-account-id auth

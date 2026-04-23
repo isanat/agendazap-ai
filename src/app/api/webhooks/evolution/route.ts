@@ -3,7 +3,7 @@ import { db } from '@/lib/db';
 import { generateChatCompletion, canAccountUseAI, transcribeAudioBase64, type ChatMessage } from '@/lib/ai-provider-service';
 import { generateSystemPrompt, findOrCreateClient, detectNameInMessage, updateClientName, detectPaymentPreference, updateClientPaymentPreference, detectCpfInMessage, updateClientCpf, updateServiceHistory, detectBirthDateInMessage, updateClientBirthDate } from '@/lib/ai-context-service';
 import { decryptCredentials } from '@/app/api/integrations/route';
-import { getEvolutionApiConfig, isValidPhoneNumber, isLidIdentifier, isJidIdentifier, isNonPhoneIdentifier, resolveLidToPhone, saveLidMapping, findAccountByInstance, setCachedLidPhone } from '@/lib/lid-resolution';
+import { getEvolutionApiConfig, isValidPhoneNumber, isLidIdentifier, isJidIdentifier, isNonPhoneIdentifier, resolveLidToPhone, saveLidMapping, findAccountByInstance, setCachedLidPhone, migrateClientLidToPhone } from '@/lib/lid-resolution';
 
 /**
  * In-memory processing lock to prevent duplicate AI responses.
@@ -1995,6 +1995,52 @@ async function processMessageWithAI(
         // Phone is still a LID or invalid - try JID-based sending
         console.log(`[Webhook] 📤 LID/unresolved phone (${phoneForSending}), attempting JID-based sending for ${originalJid}...`);
         
+        // Pre-send LID resolution: Try one more time to resolve the LID right before sending
+        // The Evolution API may have cached the contact info since the initial resolution attempt
+        if (isLidIdentifier(phoneForSending) && originalJid?.includes('@lid')) {
+          console.log(`[Webhook] 🔄 Pre-send LID resolution attempt for ${phoneForSending}...`);
+          try {
+            // Extract LID value before resolving (before phoneForSending is reassigned)
+            const lidValueForMigration = phoneForSending.replace('lid:', '');
+            const preSendResolved = await resolveLidToPhone(instanceName, phoneForSending);
+            if (preSendResolved && isValidPhoneNumber(preSendResolved)) {
+              phoneForSending = preSendResolved;
+              console.log(`[Webhook] ✅ Pre-send LID resolved to: ${preSendResolved}`);
+              // Also update the client record with the resolved phone
+              try {
+                await migrateClientLidToPhone(clientId, lidValueForMigration, preSendResolved);
+              } catch (migrateErr) {
+                console.warn(`[Webhook] Could not migrate client LID to phone: ${migrateErr}`);
+              }
+            }
+          } catch (preSendErr) {
+            console.warn(`[Webhook] Pre-send LID resolution failed: ${preSendErr}`);
+          }
+        }
+
+        // Before trying JID-based sending, try to force the Evolution API to resolve the LID
+        // by calling fetchPhoneNumber which may have cached the mapping
+        if (originalJid?.includes('@lid')) {
+          try {
+            const systemConfig = await getEvolutionApiConfig();
+            if (systemConfig) {
+              const lidValue = originalJid.split('@')[0];
+              await fetch(`${systemConfig.apiUrl}/chat/fetchPhoneNumber/${instanceName}`, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'apikey': systemConfig.apiKey,
+                },
+                body: JSON.stringify({ where: { lidJid: originalJid } }),
+              });
+              // Don't wait for the result, just trigger the cache update
+              console.log(`[Webhook] 📋 Triggered fetchPhoneNumber cache for ${originalJid}`);
+            }
+          } catch (fetchErr) {
+            // Ignore errors, this is best-effort
+          }
+        }
+        
         // Try 1: Send directly to the original JID FIRST (most reliable for @lid contacts)
         // Evolution API supports sending directly to @lid JIDs - this is the primary method
         console.log(`[Webhook] 📤 Attempt 1: Sending directly to original JID ${originalJid}...`);
@@ -2022,7 +2068,8 @@ async function processMessageWithAI(
           }
           
           // Try 3: If we have a phoneForSending that looks partially valid, try it with @s.whatsapp.net
-          if (!finalSendResult.success) {
+          // IMPORTANT: Skip this if phoneForSending is a LID/JID identifier - those digits are NOT phone numbers
+          if (!finalSendResult.success && !isLidIdentifier(phoneForSending) && !isJidIdentifier(phoneForSending)) {
             const phoneDigits = phoneForSending.replace(/\D/g, '');
             if (phoneDigits.length >= 10 && phoneDigits.length <= 15) {
               const phoneWithCountryCode = phoneDigits.startsWith('55') ? phoneDigits : '55' + phoneDigits;
@@ -2036,14 +2083,21 @@ async function processMessageWithAI(
               } else {
                 finalSendResult = phoneResult;
               }
+            } else {
+              console.log(`[Webhook] 📤 Attempt 3 skipped: phoneForSending digits (${phoneDigits.length}) outside valid range (10-15)`);
             }
+          } else if (finalSendResult.success) {
+            // Already succeeded, skip
+          } else {
+            console.log(`[Webhook] 📤 Attempt 3 skipped: phoneForSending is a LID/JID identifier (${phoneForSending.substring(0, 20)}...), digits are NOT a phone number`);
           }
         }
       } else {
         // No JID available and no valid phone - mark as failed
         console.warn(`[Webhook] ⚠️ AI response saved but NOT sent - could not resolve LID and no JID available: ${phone}`);
         // Try last-resort: if we have instanceName and any phone digits, attempt @s.whatsapp.net
-        if (instanceName && phoneForSending) {
+        // IMPORTANT: Skip if phoneForSending is a LID/JID identifier - those digits are NOT phone numbers
+        if (instanceName && phoneForSending && !isLidIdentifier(phoneForSending) && !isJidIdentifier(phoneForSending)) {
           const phoneDigits = phoneForSending.replace(/\D/g, '');
           if (phoneDigits.length >= 10) {
             const phoneWithCountryCode = phoneDigits.startsWith('55') ? phoneDigits : '55' + phoneDigits;
@@ -2056,6 +2110,8 @@ async function processMessageWithAI(
               console.log(`[Webhook] ✅ Last resort message sent successfully to ${swhatsappJid}`);
             }
           }
+        } else if (instanceName && phoneForSending && (isLidIdentifier(phoneForSending) || isJidIdentifier(phoneForSending))) {
+          console.log(`[Webhook] 📤 Last resort skipped: phoneForSending is a LID/JID identifier, cannot construct valid @s.whatsapp.net JID`);
         }
       }
       
