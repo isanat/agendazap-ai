@@ -66,7 +66,7 @@ export function BusinessAnalyticsWidget({ accountId }: BusinessAnalyticsWidgetPr
     avgTicket: 0,
     newClients: 0,
     returnRate: 0,
-    monthlyGoal: 0,
+    monthlyGoal: 0,  // Will be populated from API when available
     monthlyProgress: 0
   });
 
@@ -86,13 +86,24 @@ export function BusinessAnalyticsWidget({ accountId }: BusinessAnalyticsWidgetPr
       const response = await authFetch(`/api/dashboard/stats?accountId=${accountId}`);
       if (response.ok) {
         const data = await response.json();
+        // Calculate average ticket from total revenue and completed appointments
+        const completedAppointments = data.stats?.completedAppointments || data.stats?.totalAppointments || 0;
+        const monthRevenue = data.stats?.monthRevenue || 0;
+        const avgTicket = completedAppointments > 0 ? Math.round(monthRevenue / completedAppointments) : 0;
+        
+        // Calculate return rate from returning vs new clients
+        const totalClients = data.stats?.totalClients || 0;
+        const newClientsThisMonth = data.stats?.newClientsThisMonth || 0;
+        const returningClients = totalClients > newClientsThisMonth ? totalClients - newClientsThisMonth : 0;
+        const returnRate = totalClients > 0 ? Math.round((returningClients / totalClients) * 100) : 0;
+        
         setStats({
-          weekRevenue: data.stats?.monthRevenue || 0,
-          avgTicket: 0,
-          newClients: data.stats?.newClientsThisMonth || 0,
-          returnRate: 0,
-          monthlyGoal: 40000,
-          monthlyProgress: data.stats?.monthRevenue || 0
+          weekRevenue: monthRevenue,
+          avgTicket,
+          newClients: newClientsThisMonth,
+          returnRate,
+          monthlyGoal: data.stats?.monthlyGoal || 0,
+          monthlyProgress: monthRevenue
         });
       }
     } catch (error) {
@@ -183,8 +194,8 @@ export function BusinessAnalyticsWidget({ accountId }: BusinessAnalyticsWidgetPr
           />
         </div>
 
-        {/* Performance Indicators */}
-        {stats.monthlyGoal > 0 && (
+        {/* Performance Indicators - Only show if goal is set */}
+        {stats.monthlyGoal > 0 && stats.weekRevenue > 0 && (
           <div className="space-y-3 pt-2">
             <div className="flex items-center justify-between">
               <span className="text-xs text-muted-foreground">Meta Mensal</span>

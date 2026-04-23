@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { generateChatCompletion, canAccountUseAI, transcribeAudioBase64, type ChatMessage } from '@/lib/ai-provider-service';
-import { generateSystemPrompt, findOrCreateClient, detectNameInMessage, updateClientName, detectPaymentPreference, updateClientPaymentPreference, detectCpfInMessage, updateClientCpf } from '@/lib/ai-context-service';
+import { generateSystemPrompt, findOrCreateClient, detectNameInMessage, updateClientName, detectPaymentPreference, updateClientPaymentPreference, detectCpfInMessage, updateClientCpf, updateServiceHistory, detectBirthDateInMessage, updateClientBirthDate } from '@/lib/ai-context-service';
 import { decryptCredentials } from '@/app/api/integrations/route';
 
 /**
@@ -1277,6 +1277,13 @@ async function processIncomingMessage(
     console.log(`[Webhook] CPF detected and updated: ${detectedCpf.substring(0, 3)}***`);
   }
 
+  // DETECT BIRTH DATE: Check if user is providing their birth date
+  const detectedBirthDate = detectBirthDateInMessage(messageText);
+  if (detectedBirthDate) {
+    await updateClientBirthDate(clientId, detectedBirthDate);
+    console.log(`[Webhook] Birth date detected and updated: ${detectedBirthDate.toLocaleDateString('pt-BR')}`);
+  }
+
   // Save message to database
   // Include LID identifier in metadata for future DB-based LID resolution
   const messageMetadata: Record<string, unknown> = {
@@ -1396,11 +1403,191 @@ async function createAppointmentFromBooking(
     time: string;
     paymentMethod: string;
   }
-): Promise<{ success: boolean; appointmentId?: string; error?: string; pixData?: { qrCode?: string; qrCodeBase64?: string; ticketUrl?: string; deepLink?: string } }> {
+): Promise<{ success: boolean; appointmentId?: string; appointmentIds?: string[]; error?: string; pixData?: { qrCode?: string; qrCodeBase64?: string; ticketUrl?: string; deepLink?: string }; isPackage?: boolean }> {
   try {
     console.log(`[Webhook] Creating appointment: service="${booking.serviceName}", professional="${booking.professionalName}", date=${booking.date}, time=${booking.time}, payment=${booking.paymentMethod}`);
     
-    // Find the service by name (exact match first, then partial)
+    // === STEP 1: Check if serviceName matches a Package first ===
+    let foundPackage = await db.package.findFirst({
+      where: { accountId, name: { equals: booking.serviceName, mode: 'insensitive' }, isActive: true },
+      include: {
+        packageServices: {
+          include: { Service: true }
+        }
+      }
+    });
+    
+    if (!foundPackage) {
+      foundPackage = await db.package.findFirst({
+        where: { accountId, name: { contains: booking.serviceName, mode: 'insensitive' }, isActive: true },
+        include: {
+          packageServices: {
+            include: { Service: true }
+          }
+        }
+      });
+    }
+    
+    // If a package was found, create appointments for each service in the package
+    if (foundPackage && foundPackage.packageServices.length > 0) {
+      console.log(`[Webhook] 📦 Package found: "${foundPackage.name}" with ${foundPackage.packageServices.length} services, price R$ ${foundPackage.price}`);
+      
+      // Find the professional
+      let foundProfessional = await db.professional.findFirst({
+        where: { accountId, name: { equals: booking.professionalName, mode: 'insensitive' }, isActive: true }
+      });
+      if (!foundProfessional) {
+        foundProfessional = await db.professional.findFirst({
+          where: { accountId, name: { contains: booking.professionalName, mode: 'insensitive' }, isActive: true }
+        });
+      }
+      if (!foundProfessional) {
+        const allProfs = await db.professional.findMany({ where: { accountId, isActive: true }, select: { name: true } });
+        console.error(`[Webhook] Professional not found: "${booking.professionalName}". Available professionals: ${allProfs.map(p => p.name).join(', ')}`);
+        return { success: false, error: `Professional not found: ${booking.professionalName}` };
+      }
+      
+      // Parse date and time
+      const baseDatetime = new Date(`${booking.date}T${booking.time}:00-03:00`);
+      if (isNaN(baseDatetime.getTime())) {
+        console.error(`[Webhook] Invalid datetime: ${booking.date}T${booking.time}`);
+        return { success: false, error: `Invalid datetime: ${booking.date}T${booking.time}` };
+      }
+      
+      // Sort package services by duration (longest first) for scheduling
+      const sortedServices = [...foundPackage.packageServices].sort((a, b) => 
+        (b.Service?.durationMinutes || 30) - (a.Service?.durationMinutes || 30)
+      );
+      
+      // Check for conflicts for the entire time block
+      let currentSlotStart = new Date(baseDatetime);
+      let totalDuration = 0;
+      const serviceSlots: { service: any; startTime: Date; endTime: Date }[] = [];
+      
+      for (const ps of sortedServices) {
+        if (!ps.Service) continue;
+        const duration = ps.Service.durationMinutes * ps.quantity;
+        totalDuration += duration;
+        const slotEnd = new Date(currentSlotStart.getTime() + duration * 60000);
+        serviceSlots.push({ service: ps.Service, startTime: new Date(currentSlotStart), endTime: slotEnd });
+        currentSlotStart = slotEnd;
+      }
+      
+      if (serviceSlots.length === 0) {
+        return { success: false, error: `Package "${foundPackage.name}" has no valid services` };
+      }
+      
+      const overallEndTime = new Date(baseDatetime.getTime() + totalDuration * 60000);
+      
+      // Check for conflicts in the entire time block
+      const conflicts = await db.appointment.findMany({
+        where: {
+          accountId,
+          professionalId: foundProfessional.id,
+          status: { in: ['pending', 'confirmed', 'scheduled'] },
+          datetime: { lt: overallEndTime },
+          endTime: { gt: baseDatetime },
+        }
+      });
+      
+      if (conflicts.length > 0) {
+        const duplicateFromSameClient = conflicts.find(c => c.clientId === clientId);
+        if (duplicateFromSameClient) {
+          console.log(`[Webhook] Duplicate package booking from same client - appointment already exists: ${duplicateFromSameClient.id}`);
+          const existingPixData = duplicateFromSameClient.pixQrCode ? { qrCode: duplicateFromSameClient.pixQrCode || undefined } : undefined;
+          return { success: true, appointmentId: duplicateFromSameClient.id, pixData: existingPixData };
+        }
+        console.log(`[Webhook] Time slot conflict for package on ${booking.date} at ${booking.time}`);
+        return { success: false, error: 'Time slot already booked' };
+      }
+      
+      // Create individual appointments for each service in the package
+      const createdAppointments: string[] = [];
+      const firstAppointmentId = ''; // Will be set below
+      
+      for (const slot of serviceSlots) {
+        const apt = await db.appointment.create({
+          data: {
+            accountId,
+            clientId,
+            serviceId: slot.service.id,
+            professionalId: foundProfessional.id,
+            datetime: slot.startTime,
+            endTime: slot.endTime,
+            status: booking.paymentMethod === 'pix' ? 'pending' : 'confirmed',
+            notes: `Parte do pacote "${foundPackage.name}". Agendado via WhatsApp IA. Pagamento: ${booking.paymentMethod}`,
+            price: foundPackage.price / serviceSlots.length, // Distribute package price evenly
+          },
+          include: { Service: true, Professional: true }
+        });
+        createdAppointments.push(apt.id);
+        console.log(`[Webhook] ✅ Package appointment created: ${apt.id} - ${slot.service.name} with ${foundProfessional.name} at ${slot.startTime.toISOString()}`);
+        
+        // Update service history for each service
+        await updateServiceHistory(clientId, slot.service.name, foundProfessional.name, slot.startTime, 'pending').catch(() => {});
+      }
+      
+      // Update client payment preference
+      if (booking.paymentMethod) {
+        await db.client.update({
+          where: { id: clientId },
+          data: { 
+            paymentPreference: booking.paymentMethod,
+            totalAppointments: { increment: serviceSlots.length },
+            lastVisit: baseDatetime,
+          }
+        }).catch(() => {});
+      } else {
+        await db.client.update({
+          where: { id: clientId },
+          data: { 
+            totalAppointments: { increment: serviceSlots.length },
+            lastVisit: baseDatetime,
+          }
+        }).catch(() => {});
+      }
+      
+      // Generate PIX payment for the PACKAGE total price
+      let pixData: { qrCode?: string; qrCodeBase64?: string; ticketUrl?: string; deepLink?: string } | undefined;
+      
+      if (booking.paymentMethod === 'pix' && foundPackage.price > 0) {
+        try {
+          const clientInfo = await db.client.findUnique({
+            where: { id: clientId },
+            select: { cpf: true, name: true, email: true }
+          });
+          // Use the first appointment ID for PIX, and package name + price
+          pixData = await generatePixPayment(
+            accountId,
+            createdAppointments[0],
+            foundPackage.price,
+            foundPackage.name,
+            clientInfo?.cpf || null,
+            clientInfo?.name || null,
+            clientInfo?.email || null
+          );
+          
+          // If PIX was generated, update ALL appointments in the package with the PIX data
+          if (pixData) {
+            for (const aptId of createdAppointments) {
+              await db.appointment.update({
+                where: { id: aptId },
+                data: {
+                  pixId: pixData.qrCode ? `pkg_${createdAppointments[0]}` : undefined,
+                  notes: `Parte do pacote "${foundPackage.name}". PIX gerado no agendamento principal (${createdAppointments[0]}). Pagamento: ${booking.paymentMethod}`,
+                }
+              }).catch(() => {});
+            }
+          }
+        } catch (pixError) {
+          console.error(`[Webhook] Failed to generate PIX payment for package: ${pixError instanceof Error ? pixError.message : pixError}`);
+        }
+      }
+      
+      return { success: true, appointmentId: createdAppointments[0], appointmentIds: createdAppointments, pixData, isPackage: true };
+    }
+    
+    // === STEP 2: Not a package - look for a single service ===
     let foundService = await db.service.findFirst({
       where: { accountId, name: { equals: booking.serviceName, mode: 'insensitive' } }
     });
@@ -1411,10 +1598,148 @@ async function createAppointmentFromBooking(
       });
     }
     
+    // === STEP 2b: Try splitting "Service1 + Service2" or "Service1 e Service2" format ===
+    if (!foundService) {
+      const separatorMatch = booking.serviceName.match(/\s*[+&]\s*|\s+e\s+/i);
+      if (separatorMatch) {
+        console.log(`[Webhook] Service not found as single entry, trying multi-service split: "${booking.serviceName}"`);
+        const parts = booking.serviceName.split(/\s*[+&]\s*|\s+e\s+/i).map(s => s.trim()).filter(Boolean);
+        
+        if (parts.length >= 2) {
+          // Find each individual service
+          const foundServices: any[] = [];
+          for (const part of parts) {
+            let svc = await db.service.findFirst({
+              where: { accountId, name: { equals: part, mode: 'insensitive' }, isActive: true }
+            });
+            if (!svc) {
+              svc = await db.service.findFirst({
+                where: { accountId, name: { contains: part, mode: 'insensitive' }, isActive: true }
+              });
+            }
+            if (svc) foundServices.push(svc);
+          }
+          
+          if (foundServices.length === parts.length) {
+            // All individual services found - create appointments for each
+            console.log(`[Webhook] ✅ Multi-service booking: ${foundServices.map(s => s.name).join(' + ')}`);
+            
+            // Find the professional
+            let foundProfessional = await db.professional.findFirst({
+              where: { accountId, name: { equals: booking.professionalName, mode: 'insensitive' }, isActive: true }
+            });
+            if (!foundProfessional) {
+              foundProfessional = await db.professional.findFirst({
+                where: { accountId, name: { contains: booking.professionalName, mode: 'insensitive' }, isActive: true }
+              });
+            }
+            if (!foundProfessional) {
+              const allProfs = await db.professional.findMany({ where: { accountId, isActive: true }, select: { name: true } });
+              return { success: false, error: `Professional not found: ${booking.professionalName}` };
+            }
+            
+            const baseDatetime = new Date(`${booking.date}T${booking.time}:00-03:00`);
+            if (isNaN(baseDatetime.getTime())) {
+              return { success: false, error: `Invalid datetime: ${booking.date}T${booking.time}` };
+            }
+            
+            const totalPrice = foundServices.reduce((sum, s) => sum + s.price, 0);
+            let totalDuration = foundServices.reduce((sum, s) => sum + s.durationMinutes, 0);
+            const overallEndTime = new Date(baseDatetime.getTime() + totalDuration * 60000);
+            
+            // Check for conflicts
+            const conflicts = await db.appointment.findMany({
+              where: {
+                accountId,
+                professionalId: foundProfessional.id,
+                status: { in: ['pending', 'confirmed', 'scheduled'] },
+                datetime: { lt: overallEndTime },
+                endTime: { gt: baseDatetime },
+              }
+            });
+            
+            if (conflicts.length > 0) {
+              const duplicateFromSameClient = conflicts.find(c => c.clientId === clientId);
+              if (duplicateFromSameClient) {
+                const existingPixData = duplicateFromSameClient.pixQrCode ? { qrCode: duplicateFromSameClient.pixQrCode || undefined } : undefined;
+                return { success: true, appointmentId: duplicateFromSameClient.id, pixData: existingPixData };
+              }
+              return { success: false, error: 'Time slot already booked' };
+            }
+            
+            // Create appointments for each service, sequentially scheduled
+            const createdAppointments: string[] = [];
+            let currentSlotStart = new Date(baseDatetime);
+            
+            for (const svc of foundServices) {
+              const slotEnd = new Date(currentSlotStart.getTime() + svc.durationMinutes * 60000);
+              const apt = await db.appointment.create({
+                data: {
+                  accountId,
+                  clientId,
+                  serviceId: svc.id,
+                  professionalId: foundProfessional.id,
+                  datetime: currentSlotStart,
+                  endTime: slotEnd,
+                  status: booking.paymentMethod === 'pix' ? 'pending' : 'confirmed',
+                  notes: `Combo: ${foundServices.map(s => s.name).join(' + ')}. Agendado via WhatsApp IA. Pagamento: ${booking.paymentMethod}`,
+                  price: svc.price,
+                },
+                include: { Service: true, Professional: true }
+              });
+              createdAppointments.push(apt.id);
+              console.log(`[Webhook] ✅ Multi-service appointment created: ${apt.id} - ${svc.name}`);
+              
+              // Update service history
+              await updateServiceHistory(clientId, svc.name, foundProfessional.name, currentSlotStart, 'pending').catch(() => {});
+              
+              currentSlotStart = slotEnd;
+            }
+            
+            // Update client
+            await db.client.update({
+              where: { id: clientId },
+              data: { 
+                paymentPreference: booking.paymentMethod || undefined,
+                totalAppointments: { increment: foundServices.length },
+                lastVisit: baseDatetime,
+              }
+            }).catch(() => {});
+            
+            // Generate PIX for total price
+            let pixData: { qrCode?: string; qrCodeBase64?: string; ticketUrl?: string; deepLink?: string } | undefined;
+            
+            if (booking.paymentMethod === 'pix' && totalPrice > 0) {
+              try {
+                const clientInfo = await db.client.findUnique({
+                  where: { id: clientId },
+                  select: { cpf: true, name: true, email: true }
+                });
+                pixData = await generatePixPayment(
+                  accountId,
+                  createdAppointments[0],
+                  totalPrice,
+                  foundServices.map(s => s.name).join(' + '),
+                  clientInfo?.cpf || null,
+                  clientInfo?.name || null,
+                  clientInfo?.email || null
+                );
+              } catch (pixError) {
+                console.error(`[Webhook] Failed to generate PIX for multi-service: ${pixError instanceof Error ? pixError.message : pixError}`);
+              }
+            }
+            
+            return { success: true, appointmentId: createdAppointments[0], appointmentIds: createdAppointments, pixData, isPackage: true };
+          }
+        }
+      }
+    }
+    
     if (!foundService) {
       // Last resort: list all services for debugging
       const allServices = await db.service.findMany({ where: { accountId, isActive: true }, select: { name: true } });
-      console.error(`[Webhook] Service not found: "${booking.serviceName}". Available services: ${allServices.map(s => s.name).join(', ')}`);
+      const allPackages = await db.package.findMany({ where: { accountId, isActive: true }, select: { name: true } });
+      console.error(`[Webhook] Service not found: "${booking.serviceName}". Available services: ${allServices.map(s => s.name).join(', ')}. Available packages: ${allPackages.map(p => p.name).join(', ')}`);
       return { success: false, error: `Service not found: ${booking.serviceName}` };
     }
     
@@ -1487,12 +1812,20 @@ async function createAppointmentFromBooking(
     
     console.log(`[Webhook] ✅ Appointment created: ${appointment.id} - ${foundService.name} with ${foundProfessional.name} at ${datetime.toISOString()}`);
     
-    // Update client payment preference if detected
+    // Update service history
+    await updateServiceHistory(clientId, foundService.name, foundProfessional.name, datetime, 'pending').catch(() => {});
+    
+    // Update client payment preference and last visit
     if (booking.paymentMethod) {
       await db.client.update({
         where: { id: clientId },
-        data: { paymentPreference: booking.paymentMethod }
+        data: { paymentPreference: booking.paymentMethod, lastVisit: datetime }
       }).catch(() => {}); // Don't fail if update fails
+    } else {
+      await db.client.update({
+        where: { id: clientId },
+        data: { lastVisit: datetime }
+      }).catch(() => {});
     }
     
     // Update client total appointments count
@@ -1826,23 +2159,53 @@ async function processMessageWithAI(
       // Create appointment if booking command was found
       let appointmentId: string | undefined;
       let pixInfo: { qrCode?: string; ticketUrl?: string; deepLink?: string } | undefined;
+      let bookingResult: Awaited<ReturnType<typeof createAppointmentFromBooking>> | undefined;
       if (booking) {
         console.log(`[Webhook] 📅 Booking command detected: ${booking.serviceName} with ${booking.professionalName} on ${booking.date} at ${booking.time}`);
-        const bookingResult = await createAppointmentFromBooking(accountId, clientId, booking);
+        bookingResult = await createAppointmentFromBooking(accountId, clientId, booking);
         if (bookingResult.success) {
           appointmentId = bookingResult.appointmentId;
           pixInfo = bookingResult.pixData;
           console.log(`[Webhook] ✅ Appointment created successfully: ${appointmentId}${pixInfo ? ' with PIX payment' : ''}`);
         } else {
           console.error(`[Webhook] ❌ Failed to create appointment: ${bookingResult.error}`);
-          // Append error info to the response so Luna can inform the client
-          // Don't mention the [AGENDAR:] system, just the practical issue
+          // When booking fails, modify the response to inform the client instead of
+          // leaving them thinking the booking was confirmed with PIX on the way
         }
       }
       
       // Build the response - PIX info is now sent as separate messages via sendPixPaymentMessage
       // so we keep the AI response clean and focused on the appointment confirmation
       let response = cleanedResponse;
+      
+      // If booking failed, replace the optimistic confirmation with an error message
+      if (booking && !bookingResult?.success) {
+        // The AI likely said something like "Vou gerar o QR Code PIX" but the booking failed.
+        // Replace references to PIX/QR Code with an honest error message.
+        const errorMsg = bookingResult?.error || 'Erro ao criar agendamento';
+        
+        // Remove common PIX promise phrases from the response
+        response = response
+          .replace(/Vou gerar o QR Code PIX para (você|vc) pagar agora mesmo!?\s*✅?/gi, '')
+          .replace(/Vou gerar o QR Code PIX!?\s*✅?/gi, '')
+          .replace(/QR Code PIX será (gerado|enviado)[^.]*\./gi, '')
+          .replace(/PIX para pagamento imediato!?\s*✅?/gi, '')
+          .replace(/✅\s*$/gm, '')
+          .trim();
+        
+        // Append a user-friendly error message
+        if (errorMsg.includes('Service not found') || errorMsg.includes('not found')) {
+          response += '\n\n⚠️ Desculpe, tive um problema ao confirmar seu agendamento. O serviço solicitado não está disponível no momento. Posso ajudá-lo a escolher outro serviço ou horário? 😊';
+        } else if (errorMsg.includes('Time slot already booked') || errorMsg.includes('conflict')) {
+          response += '\n\n⚠️ Desculpe, esse horário acabou de ser preenchido! Posso verificar outro horário disponível para você? 😊';
+        } else if (errorMsg.includes('Professional not found')) {
+          response += '\n\n⚠️ Desculpe, o profissional selecionado não está disponível. Posso verificar com outro profissional? 😊';
+        } else {
+          response += '\n\n⚠️ Desculpe, tive um problema técnico ao confirmar seu agendamento. Por favor, tente novamente em instantes ou entre em contato diretamente com o salão. 😊';
+        }
+        
+        console.log(`[Webhook] 📝 Modified response to include booking error: "${errorMsg}"`);
+      }
       const hasPixData = !!(pixInfo?.qrCode || pixInfo?.ticketUrl);
       const aiTime = Date.now() - processStart;
       console.log(`[Webhook] 🤖 AI response generated in ${aiTime}ms: "${response.substring(0, 80)}..."`);

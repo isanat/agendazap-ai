@@ -62,6 +62,7 @@ export interface ClientContext {
   phone: string;
   email: string | null;
   cpf: string | null;
+  birthDate: Date | null;
   totalAppointments: number;
   lastVisit: Date | null;
   loyaltyPoints: number;
@@ -378,6 +379,51 @@ export async function updateClientCpf(
 }
 
 /**
+ * Detect a birth date in a message (DD/MM or DD/MM/YYYY format)
+ * Returns a Date object (with year 2000 if not provided) or null
+ */
+export function detectBirthDateInMessage(message: string): Date | null {
+  const cleaned = message.replace(/(?:meu aniversário é|aniversário:|nasci em|data de nascimento:|nasci dia|aniversário dia|minha data|meu niver é|niver:|aniversario|aniversário é dia)\s*/i, '').trim();
+  
+  // Pattern 1: DD/MM/YYYY
+  const fullDateMatch = cleaned.match(/\b(\d{1,2})\/(\d{1,2})\/(\d{4})\b/);
+  if (fullDateMatch) {
+    const day = parseInt(fullDateMatch[1]);
+    const month = parseInt(fullDateMatch[2]);
+    const year = parseInt(fullDateMatch[3]);
+    if (day >= 1 && day <= 31 && month >= 1 && month <= 12 && year >= 1900 && year <= 2020) {
+      return new Date(year, month - 1, day);
+    }
+  }
+  
+  // Pattern 2: DD/MM (day and month only)
+  const dayMonthMatch = cleaned.match(/\b(\d{1,2})\/(\d{1,2})\b/);
+  if (dayMonthMatch) {
+    const day = parseInt(dayMonthMatch[1]);
+    const month = parseInt(dayMonthMatch[2]);
+    if (day >= 1 && day <= 31 && month >= 1 && month <= 12) {
+      return new Date(2000, month - 1, day); // Use year 2000 as placeholder
+    }
+  }
+  
+  return null;
+}
+
+/**
+ * Update client birth date
+ */
+export async function updateClientBirthDate(
+  clientId: string,
+  birthDate: Date
+): Promise<void> {
+  await db.client.update({
+    where: { id: clientId },
+    data: { birthDate }
+  });
+  console.log(`[AI Context] Client birth date updated: ${clientId} -> ${birthDate.toLocaleDateString('pt-BR')}`);
+}
+
+/**
  * Detect payment preference in a message
  */
 export function detectPaymentPreference(message: string): string | null {
@@ -606,6 +652,7 @@ export async function getClientContext(
     phone: client.phone,
     email: client.email,
     cpf: client.cpf,
+    birthDate: client.birthDate || null,
     totalAppointments: client.totalAppointments || completedAppointments.length,
     lastVisit: client.lastVisit || lastAppointments[0]?.datetime || null,
     loyaltyPoints: client.loyaltyPoints || 0,
@@ -764,6 +811,7 @@ ${client.daysSinceLastVisit !== null ? `- Dias desde a última visita: ${client.
 - Pontos de fidelidade: ${client.loyaltyPoints} pontos
 ${paymentLabel ? `- Preferência de pagamento: ${paymentLabel}` : ''}
 ${client.cpf ? `- CPF: ${client.cpf}` : '⚠️ CPF não cadastrado - Quando o cliente escolher PIX, PERGUNTE o CPF para gerar o pagamento!'}
+${client.birthDate ? `- Data de nascimento: ${new Date(client.birthDate).toLocaleDateString('pt-BR')}` : '⚠️ Data de nascimento não cadastrada - Pergunte o aniversário de forma natural para enviar felicitações!'}
 ${client.notes ? `- Observações: ${client.notes}` : ''}
 ${client.aiNotes ? `- Notas da IA: ${client.aiNotes}` : ''}
 ${client.isNewClient ? '⚠️ CLIENTE NOVO - Primeiro contato! Pergunte o nome dele para personalizar o atendimento.' : ''}
@@ -832,6 +880,7 @@ ${clientContext}
 - Agendamento: serviço → profissional → data/hora → pagamento → confirmar dados + valor
 - Se faz 2+ semanas sem vir, sugira retorno. Se cancelou, pergunte remarcar
 - Pagamento: PIX, cartão, dinheiro ou presencialmente
+- Para clientes novos, PERGUNTE a data de nascimento (dia/mês) de forma natural para enviar felicitações no aniversário
 
 === PAGAMENTO PIX AUTOMÁTICO ===
 IMPORTANTE: Quando o cliente escolher PIX como forma de pagamento:
@@ -852,7 +901,8 @@ Exemplo: [AGENDAR:Corte Masculino:Roberto:2026-04-23:13:30:pix]
 
 Regras:
 - Só inclua [AGENDAR:...] quando tiver TODOS os dados confirmados
-- serviceName deve ser EXATAMENTE como consta na lista de serviços
+- serviceName pode ser: (1) nome EXATO de um serviço da lista, (2) nome EXATO de um pacote/promoção da lista, ou (3) "Serviço1 + Serviço2" para combos (ex: "Corte Masculino + Barba")
+- Se o cliente pedir um combo que NÃO existe como pacote, use o formato "Serviço1 + Serviço2" (ex: [AGENDAR:Corte Masculino + Barba:Roberto:2026-04-23:14:00:pix])
 - professionalName deve ser EXATAMENTE como consta na lista de profissionais
 - Data no formato YYYY-MM-DD, hora no formato HH:mm (24h)
 - paymentMethod: pix, credit_card, debit_card, cash ou in_person
