@@ -58,16 +58,12 @@ interface Professional {
   appointmentCount: number
 }
 
-const serviceOptions = [
-  { id: 'corte', name: 'Corte', icon: Scissors },
-  { id: 'barba', name: 'Barba', icon: Sparkles },
-  { id: 'coloracao', name: 'Coloração', icon: Sparkles },
-  { id: 'hidratacao', name: 'Hidratação', icon: Sparkles },
-  { id: 'manicure', name: 'Manicure', icon: Sparkles },
-  { id: 'pedicure', name: 'Pedicure', icon: Sparkles },
-  { id: 'sobrancelha', name: 'Sobrancelha', icon: Sparkles },
-  { id: 'maquiagem', name: 'Maquiagem', icon: Sparkles },
-]
+// Service options will be fetched from the API
+interface ServiceOption {
+  id: string
+  name: string
+}
+
 
 const colorOptions = ['#10B981', '#3B82F6', '#8B5CF6', '#F59E0B', '#EF4444', '#EC4899', '#06B6D4', '#84CC16']
 
@@ -83,6 +79,7 @@ export function ProfessionalsPage() {
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [editingProfessional, setEditingProfessional] = useState<Professional | null>(null)
   const [isSaving, setIsSaving] = useState(false)
+  const [serviceOptions, setServiceOptions] = useState<ServiceOption[]>([])
   const [formData, setFormData] = useState({
     name: '',
     phone: '',
@@ -142,6 +139,21 @@ export function ProfessionalsPage() {
       setIsLoading(false)
       setIsRefreshing(false)
     }
+  }, [accountId])
+
+  // Fetch services from API for the service selector
+  useEffect(() => {
+    if (!accountId) return
+    authFetch(`/api/services?accountId=${accountId}`)
+      .then(res => res.ok ? res.json() : { services: [] })
+      .then(data => {
+        const options = (data.services || []).map((s: any) => ({
+          id: s.id,
+          name: s.name
+        }))
+        setServiceOptions(options)
+      })
+      .catch(() => {})
   }, [accountId])
 
   useEffect(() => {
