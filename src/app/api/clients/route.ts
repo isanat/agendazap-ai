@@ -35,7 +35,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
-    let { accountId, name, phone, email, notes } = body
+    let { accountId, name, phone, email, notes, cpf, birthDate } = body
 
     // Fallback: try x-account-id header from authFetch
     if (!accountId) {
@@ -60,8 +60,10 @@ export async function POST(request: NextRequest) {
         accountId,
         name,
         phone,
-        email,
-        notes,
+        email: email || null,
+        notes: notes || null,
+        cpf: cpf || null,
+        birthDate: birthDate ? new Date(birthDate) : null,
         noShowScore: 50,
       }
     })
@@ -76,20 +78,23 @@ export async function POST(request: NextRequest) {
 export async function PUT(request: NextRequest) {
   try {
     const body = await request.json()
-    const { id, name, phone, email, notes } = body
+    const { id, name, phone, email, notes, cpf, birthDate } = body
 
     if (!id) {
       return NextResponse.json({ error: 'Client ID required' }, { status: 400 })
     }
 
+    const updateData: Record<string, unknown> = {}
+    if (name !== undefined) updateData.name = name
+    if (phone !== undefined) updateData.phone = phone
+    if (email !== undefined) updateData.email = email || null
+    if (notes !== undefined) updateData.notes = notes || null
+    if (cpf !== undefined) updateData.cpf = cpf || null
+    if (birthDate !== undefined) updateData.birthDate = birthDate ? new Date(birthDate) : null
+
     const client = await db.client.update({
       where: { id },
-      data: {
-        name,
-        phone,
-        email,
-        notes,
-      }
+      data: updateData
     })
 
     return NextResponse.json({ client })

@@ -174,7 +174,11 @@ export async function PUT(request: NextRequest) {
 
     const existingProfessional = await db.professional.findUnique({
       where: { id },
-      include: { User: true }
+      include: {
+        User: {
+          select: { id: true, email: true, isActive: true, name: true, phone: true, role: true }
+        }
+      }
     })
 
     if (!existingProfessional) {

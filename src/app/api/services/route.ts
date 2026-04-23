@@ -42,7 +42,7 @@ export async function POST(request: NextRequest) {
       accountId = request.headers.get('x-account-id')
     }
 
-    if (!accountId || !name || !durationMinutes || price === undefined) {
+    if (!accountId || !name || durationMinutes == null || price === undefined) {
       console.log('[POST /api/services] Missing required fields:', { accountId, name, durationMinutes, price })
       return NextResponse.json({ error: 'Missing required fields' }, { status: 400 })
     }
