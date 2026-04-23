@@ -116,10 +116,12 @@ export async function findOrCreateClient(
 ): Promise<string> {
   const normalizedPhone = phone.replace(/\D/g, '');
   
-  // For LID identifiers, search by exact match since there's no phone number to fuzzy match
+  // For LID/JID identifiers, search by exact match since there's no phone number to fuzzy match
   const isLid = phone.startsWith('lid:');
-  const searchValue = isLid ? phone : normalizedPhone;
-  const searchContains = isLid ? phone : normalizedPhone.slice(-9);
+  const isJid = phone.startsWith('jid:');
+  const isNonPhone = isLid || isJid;
+  const searchValue = isNonPhone ? phone : normalizedPhone;
+  const searchContains = isNonPhone ? phone : normalizedPhone.slice(-9);
   
   // Try to find existing client first
   const existingClient = await db.client.findFirst({
@@ -138,22 +140,22 @@ export async function findOrCreateClient(
       });
     }
     
-    // If existing client has a LID phone and we now have a real phone number, update it
-    if (existingClient.phone.startsWith('lid:') && !isLid && normalizedPhone) {
+    // If existing client has a LID/JID phone and we now have a real phone number, update it
+    if ((existingClient.phone.startsWith('lid:') || existingClient.phone.startsWith('jid:')) && !isNonPhone && normalizedPhone) {
       await db.client.update({
         where: { id: existingClient.id },
         data: { phone: normalizedPhone }
       });
-      console.log(`[AI Context] Client phone updated from LID to real number: ${normalizedPhone}`);
+      console.log(`[AI Context] Client phone updated from identifier to real number: ${normalizedPhone}`);
     }
     
     return existingClient.id;
   }
 
   // Create new client - wrap in try/catch for race condition
-  // For LID identifiers, use the LID as phone (will be updated when real phone is resolved)
-  const phoneForDb = isLid ? phone : normalizedPhone;
-  const displayName = pushName || (isLid ? `Cliente WhatsApp` : `Cliente ${normalizedPhone.slice(-4)}`);
+  // For LID/JID identifiers, use the identifier as phone (will be updated when real phone is resolved)
+  const phoneForDb = isNonPhone ? phone : normalizedPhone;
+  const displayName = pushName || (isNonPhone ? `Cliente WhatsApp` : `Cliente ${normalizedPhone.slice(-4)}`);
   
   try {
     const newClient = await db.client.create({
@@ -163,14 +165,14 @@ export async function findOrCreateClient(
         phone: phoneForDb,
         whatsappPushName: pushName || null,
         notes: pushName 
-          ? `Nome do perfil WhatsApp: ${pushName}${isLid ? ' (telefone ainda não identificado - LID)' : ''}` 
-          : isLid 
-            ? 'Cliente com LID - telefone será identificado automaticamente' 
+          ? `Nome do perfil WhatsApp: ${pushName}${isNonPhone ? ' (telefone ainda não identificado)' : ''}` 
+          : isNonPhone 
+            ? 'Cliente com identificador - telefone será identificado automaticamente' 
             : 'Cliente novo - aguardando nome',
         lastAiInteraction: new Date(),
       }
     });
-    console.log(`[AI Context] New client created: ${newClient.id} (${displayName}) for account ${accountId}${isLid ? ' [LID session]' : ''}`);
+    console.log(`[AI Context] New client created: ${newClient.id} (${displayName}) for account ${accountId}${isNonPhone ? ' [non-phone session]' : ''}`);
     return newClient.id;
   } catch (error: any) {
     // Handle race condition: unique constraint violation (P2002)

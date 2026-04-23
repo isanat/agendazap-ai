@@ -222,14 +222,14 @@ function MainPageContent() {
                 const isSuperAdmin = data.user.role === 'superadmin'
                 
                 let accountData = {
-                  id: data.user.accountId || savedAccountId || '1',
-                  businessName: isSuperAdmin ? 'AgendaZap Admin' : 'Salão Beleza Total',
-                  businessType: 'salon',
-                  whatsappNumber: '(11) 99999-0000',
+                  id: data.user.accountId || savedAccountId || '',
+                  businessName: isSuperAdmin ? 'AgendaZap Admin' : '',
+                  businessType: '',
+                  whatsappNumber: '',
                   whatsappConnected: false,
-                  plan: 'pro',
-                  noShowFeeEnabled: true,
-                  noShowFeeAmount: 50,
+                  plan: '',
+                  noShowFeeEnabled: false,
+                  noShowFeeAmount: 0,
                 }
                 
                 // Only fetch account data for non-superadmin users with an accountId
@@ -249,13 +249,13 @@ function MainPageContent() {
                     if (accData.account) {
                       accountData = {
                         id: accData.account.id,
-                        businessName: accData.account.businessName || accountData.businessName,
-                        businessType: accData.account.businessType || 'salon',
-                        whatsappNumber: accData.account.whatsappNumber || accountData.whatsappNumber,
+                        businessName: accData.account.businessName || '',
+                        businessType: accData.account.businessType || '',
+                        whatsappNumber: accData.account.whatsappNumber || '',
                         whatsappConnected: accData.account.whatsappConnected || false,
-                        plan: accData.account.plan || 'pro',
-                        noShowFeeEnabled: accData.account.noShowFeeEnabled ?? true,
-                        noShowFeeAmount: accData.account.noShowFeeAmount || 50,
+                        plan: accData.account.plan || '',
+                        noShowFeeEnabled: accData.account.noShowFeeEnabled ?? false,
+                        noShowFeeAmount: accData.account.noShowFeeAmount || 0,
                       }
                     }
                   }
@@ -292,14 +292,14 @@ function MainPageContent() {
             const isSuperAdmin = data.user.role === 'superadmin'
             
             let accountData = {
-              id: data.user.accountId || '1',
-              businessName: isSuperAdmin ? 'AgendaZap Admin' : 'Salão Beleza Total',
-              businessType: 'salon',
-              whatsappNumber: '(11) 99999-0000',
+              id: data.user.accountId || '',
+              businessName: isSuperAdmin ? 'AgendaZap Admin' : '',
+              businessType: '',
+              whatsappNumber: '',
               whatsappConnected: false,
-              plan: 'pro',
-              noShowFeeEnabled: true,
-              noShowFeeAmount: 50,
+              plan: '',
+              noShowFeeEnabled: false,
+              noShowFeeAmount: 0,
             }
             
             // Only fetch account data for non-superadmin users with an accountId
@@ -313,13 +313,13 @@ function MainPageContent() {
                 if (accData.account) {
                   accountData = {
                     id: accData.account.id,
-                    businessName: accData.account.businessName || accountData.businessName,
-                    businessType: accData.account.businessType || 'salon',
-                    whatsappNumber: accData.account.whatsappNumber || accountData.whatsappNumber,
+                    businessName: accData.account.businessName || '',
+                    businessType: accData.account.businessType || '',
+                    whatsappNumber: accData.account.whatsappNumber || '',
                     whatsappConnected: accData.account.whatsappConnected || false,
-                    plan: accData.account.plan || 'pro',
-                    noShowFeeEnabled: accData.account.noShowFeeEnabled ?? true,
-                    noShowFeeAmount: accData.account.noShowFeeAmount || 50,
+                    plan: accData.account.plan || '',
+                    noShowFeeEnabled: accData.account.noShowFeeEnabled ?? false,
+                    noShowFeeAmount: accData.account.noShowFeeAmount || 0,
                   }
                 }
               }
@@ -391,14 +391,14 @@ function MainPageContent() {
     
     // Fetch real account data including whatsappConnected
     let accountData = {
-      id: userAccountId || '1',
-      businessName: isSuperAdmin ? 'AgendaZap Admin' : 'Salão Beleza Total',
-      businessType: 'salon',
-      whatsappNumber: '(11) 99999-0000',
+      id: userAccountId || '',
+      businessName: isSuperAdmin ? 'AgendaZap Admin' : '',
+      businessType: '',
+      whatsappNumber: '',
       whatsappConnected: false,
-      plan: 'pro',
-      noShowFeeEnabled: true,
-      noShowFeeAmount: 50
+      plan: '',
+      noShowFeeEnabled: false,
+      noShowFeeAmount: 0
     }
     
     // Try to fetch real account data
@@ -412,13 +412,13 @@ function MainPageContent() {
           if (data.account) {
             accountData = {
               id: data.account.id,
-              businessName: data.account.businessName || accountData.businessName,
-              businessType: data.account.businessType || 'salon',
-              whatsappNumber: data.account.whatsappNumber || accountData.whatsappNumber,
+              businessName: data.account.businessName || '',
+              businessType: data.account.businessType || '',
+              whatsappNumber: data.account.whatsappNumber || '',
               whatsappConnected: data.account.whatsappConnected || false,
-              plan: data.account.plan || 'pro',
-              noShowFeeEnabled: data.account.noShowFeeEnabled ?? true,
-              noShowFeeAmount: data.account.noShowFeeAmount || 50,
+              plan: data.account.plan || '',
+              noShowFeeEnabled: data.account.noShowFeeEnabled ?? false,
+              noShowFeeAmount: data.account.noShowFeeAmount || 0,
             }
           }
         }

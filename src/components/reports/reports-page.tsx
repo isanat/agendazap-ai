@@ -235,7 +235,43 @@ export function ReportsPage() {
           ...reportData.serviceDistribution.map((s: { name: string; count: number; percentage: number }) => [
             s.name, String(s.count), `${s.percentage.toFixed(1).replace('.', ',')}%`
           ]),
+          [''],
         ] : []
+
+        // Section 8: Detailed Appointments List
+        let appointmentRows: string[][] = []
+        try {
+          const accountId = typeof window !== 'undefined' ? localStorage.getItem('agendazap-account-id') : null
+          if (accountId) {
+            const aptRes = await authFetch(`/api/appointments?accountId=${accountId}&limit=500&period=${period}`)
+            if (aptRes.ok) {
+              const aptData = await aptRes.json()
+              const apts = aptData.appointments || aptData || []
+              if (apts.length > 0) {
+                const statusLabel: Record<string, string> = {
+                  pending: 'Pendente', confirmed: 'Confirmado', completed: 'Concluído',
+                  cancelled: 'Cancelado', no_show: 'Não Compareceu'
+                }
+                appointmentRows = [
+                  ['DETALHAMENTO DE AGENDAMENTOS'],
+                  ['Data', 'Horário', 'Cliente', 'Serviço', 'Profissional', 'Status', 'Valor (R$)'],
+                  ...apts.map((a: any) => [
+                    a.date ? new Date(a.date + 'T12:00:00').toLocaleDateString('pt-BR') : '',
+                    a.time || '',
+                    a.clientName || a.Client?.name || '',
+                    a.serviceName || a.Service?.name || '',
+                    a.professionalName || a.Professional?.name || '',
+                    statusLabel[a.status] || a.status || '',
+                    a.price ? fmtCurrency(a.price) : '',
+                  ]),
+                  [''],
+                ]
+              }
+            }
+          }
+        } catch {
+          // If appointment details fail, skip section
+        }
 
         const allRows = [
           ...summaryRows,
@@ -245,6 +281,7 @@ export function ReportsPage() {
           ...serviceRows,
           ...noShowRows,
           ...distRows,
+          ...appointmentRows,
         ]
 
         const csvContent = allRows.map(row =>

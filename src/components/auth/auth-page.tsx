@@ -702,9 +702,9 @@ export function AuthPage({ onLogin }: AuthPageProps) {
                       />
                       <Label htmlFor="terms" className="text-sm leading-tight">
                         Li e aceito os{' '}
-                        <Button variant="link" className="px-0 h-auto text-green-600">Termos de Uso</Button>
+                        <Button variant="link" className="px-0 h-auto text-green-600" onClick={() => alert('Termos de Uso estarão disponíveis em breve.')}>Termos de Uso</Button>
                         {' '}e{' '}
-                        <Button variant="link" className="px-0 h-auto text-green-600">Política de Privacidade</Button>
+                        <Button variant="link" className="px-0 h-auto text-green-600" onClick={() => alert('Política de Privacidade estará disponível em breve.')}>Política de Privacidade</Button>
                       </Label>
                     </div>
 

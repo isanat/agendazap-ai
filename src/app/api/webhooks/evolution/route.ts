@@ -587,6 +587,21 @@ function isLidIdentifier(phone: string): boolean {
 }
 
 /**
+ * Check if a phone value is a JID-based identifier (not a real phone number)
+ * Used when neither a real phone nor a LID could be extracted
+ */
+function isJidIdentifier(phone: string): boolean {
+  return phone.startsWith('jid:');
+}
+
+/**
+ * Check if a phone value is any kind of non-real-phone identifier (LID or JID)
+ */
+function isNonPhoneIdentifier(phone: string): boolean {
+  return isLidIdentifier(phone) || isJidIdentifier(phone);
+}
+
+/**
  * Validate that a number looks like a real phone number (not a LID-derived number)
  * Brazilian numbers: 12-13 digits starting with 55 (country code)
  * Local Brazilian: 10-11 digits (area code + number)
@@ -1053,18 +1068,22 @@ async function processIncomingMessage(
   }
   
   // ADDITIONAL INCOMING DEDUP: Check if we already processed a message with the same
-  // content from the same JID in the last 30 seconds. This catches cases where Evolution API
-  // sends the same message with a DIFFERENT messageId (e.g., MESSAGES_UPSERT + messages.upsert)
+  // messageId. The ProcessedMessage table check above handles exact messageId dedup.
+  // This secondary check catches same content from the same JID in the last 10 seconds.
+  // REDUCED from 30s to 10s to avoid blocking legitimate messages from different contacts.
   const remoteJid = data.key?.remoteJid;
   const incomingText = data.message?.conversation || data.message?.extendedTextMessage?.text || '';
   if (remoteJid && incomingText) {
     try {
+      // Use exact JID match instead of contains to avoid matching wrong contacts
+      // Only dedup against messages from the SAME exact JID
+      const jidPart = remoteJid.split('@')[0];
       const recentIncoming = await db.whatsappMessage.findFirst({
         where: {
-          clientPhone: { contains: remoteJid.split('@')[0].slice(-9) },
+          clientPhone: { in: [jidPart, `lid:${jidPart}`, `jid:${jidPart}`] },
           direction: 'incoming',
           message: incomingText,
-          createdAt: { gt: new Date(Date.now() - 30_000) }, // Last 30 seconds
+          createdAt: { gt: new Date(Date.now() - 10_000) }, // Last 10 seconds
         },
         orderBy: { createdAt: 'desc' },
       });
@@ -1077,6 +1096,9 @@ async function processIncomingMessage(
       console.warn(`[Webhook] Content-based dedup check failed:`, err);
     }
   }
+  // Store the original JID for fallback sending (critical for LID-format contacts)
+  const originalJid = data.key?.remoteJid || null;
+  
   // Extract phone number or LID identifier from JID
   let phone = extractPhoneFromJid(data.key?.remoteJid);
   
@@ -1102,62 +1124,73 @@ async function processIncomingMessage(
   }
   
   // If we got a LID identifier, try to resolve it to a real phone number
-  // NOTE: We need accountId for database lookups, so we find it first
   if (phone && isLidIdentifier(phone)) {
     console.log(`[Webhook] LID detected, attempting phone resolution for: ${phone}`);
     
     try {
-      // Find the account ID first (needed for database lookups)
-      const lidAccountId = await findAccountByInstance(instanceName);
-      const lidValue = phone.replace('lid:', '');
-      
-      if (lidAccountId) {
-        // Method 1: Try Evolution API resolution (most reliable)
-        const resolvedPhone = await resolveLidToPhone(instanceName, phone);
-        if (resolvedPhone && isValidPhoneNumber(resolvedPhone)) {
-          phone = resolvedPhone;
-          console.log(`[Webhook] LID resolved via Evolution API to: ${phone}`);
-        } else {
-          // Method 2: Look at ALL outgoing messages that were successfully sent
-          // Find the phone number with the most successful deliveries
-          const sentMessages = await db.whatsappMessage.findMany({
+      // Method 1: Try Evolution API resolution (most reliable)
+      const resolvedPhone = await resolveLidToPhone(instanceName, phone);
+      if (resolvedPhone && isValidPhoneNumber(resolvedPhone)) {
+        phone = resolvedPhone;
+        console.log(`[Webhook] LID resolved via Evolution API to: ${phone}`);
+      } else {
+        // Method 2: Look for previous messages from this SAME LID in the database
+        // that were associated with a real phone number (NOT frequency-based across all contacts)
+        const lidAccountId = await findAccountByInstance(instanceName);
+        const lidValue = phone.replace('lid:', '');
+        
+        if (lidAccountId) {
+          const recentMessages = await db.whatsappMessage.findMany({
             where: {
               accountId: lidAccountId,
-              direction: 'outgoing',
-              status: 'sent',
+              direction: { in: ['incoming', 'outgoing'] },
+              createdAt: { gt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) }, // Last 30 days
             },
-            select: { clientPhone: true }
+            select: { clientPhone: true, metadata: true },
+            take: 100,
+            orderBy: { createdAt: 'desc' },
           });
           
-          // Count frequency and find the most common real phone number
-          const phoneFreq: Record<string, number> = {};
-          for (const msg of sentMessages) {
-            const p = msg.clientPhone;
-            if (p && !p.startsWith('lid:') && isValidPhoneNumber(p)) {
-              phoneFreq[p] = (phoneFreq[p] || 0) + 1;
+          // Look for messages where metadata contains this specific LID and has a real phone
+          let resolvedFromDb = false;
+          for (const msg of recentMessages) {
+            const meta = msg.metadata as Record<string, unknown> | null;
+            // Check if this message was from the same LID
+            if (meta?.originalLid === lidValue || meta?.lidIdentifier === phone || meta?.resolvedFromLid?.includes(lidValue)) {
+              // Found a previous message from this same LID that was stored with a real phone
+              if (msg.clientPhone && !isLidIdentifier(msg.clientPhone) && isValidPhoneNumber(msg.clientPhone.replace(/\D/g, ''))) {
+                phone = msg.clientPhone;
+                setCachedLidPhone(`lid:${lidValue}`, msg.clientPhone);
+                console.log(`[Webhook] LID resolved via DB metadata lookup to: ${phone}`);
+                resolvedFromDb = true;
+                break;
+              }
             }
           }
           
-          const sorted = Object.entries(phoneFreq).sort((a, b) => b[1] - a[1]);
-          console.log(`[Webhook] LID resolution candidates: ${JSON.stringify(sorted)}`);
-          
-          if (sorted.length > 0) {
-            phone = sorted[0][0];
-            console.log(`[Webhook] LID resolved via message frequency to: ${phone} (${sorted[0][1]} messages)`);
-          } else {
-            console.warn(`[Webhook] ⚠️ Could not resolve LID. No real phone found in sent messages.`);
+          if (!resolvedFromDb) {
+            console.warn(`[Webhook] ⚠️ Could not resolve LID ${lidValue} to a real phone. Will use JID-based sending via originalJid: ${originalJid}`);
           }
         }
       }
     } catch (lidError) {
       console.error(`[Webhook] Error during LID resolution: ${lidError instanceof Error ? lidError.message : lidError}`);
-      // Continue with the LID as phone - the message sending will likely fail but at least we won't crash
+      // Continue with the LID as phone - we'll use JID-based sending as fallback
     }
   }
   
+  // If phone is still null or a LID, use the original JID as a session identifier
+  // This ensures we NEVER drop messages - we'll send responses via JID-based sending
   if (!phone) {
-    console.warn(`[Webhook] Could not extract phone from JID: ${data.key?.remoteJid || 'undefined'}. Full key: ${JSON.stringify(data.key)}`);
-    return;
+    if (originalJid && (originalJid.includes('@lid') || originalJid.includes('@s.whatsapp.net'))) {
+      // Create a JID-based identifier for database storage
+      const jidPart = originalJid.split('@')[0];
+      phone = `jid:${jidPart}`;
+      console.log(`[Webhook] Using JID-based identifier for unresolvable contact: ${phone} (originalJid: ${originalJid})`);
+    } else {
+      console.warn(`[Webhook] Could not extract phone or JID from message. remoteJid: ${data.key?.remoteJid || 'undefined'}. Full key: ${JSON.stringify(data.key)}`);
+      return;
+    }
   }
 
   const accountId = await findAccountByInstance(instanceName);
@@ -1263,8 +1296,13 @@ async function processIncomingMessage(
     messageMetadata.lidIdentifier = phone;
     messageMetadata.originalJid = data.key?.remoteJid;
   }
+  // If we have a JID-based identifier, store it in metadata
+  if (isJidIdentifier(phone)) {
+    messageMetadata.originalJid = data.key?.remoteJid;
+    messageMetadata.jidIdentifier = phone;
+  }
   // If we resolved a LID to a real phone, store the mapping for future lookups
-  if (data.key?.remoteJid?.includes('@lid') && !isLidIdentifier(phone)) {
+  if (data.key?.remoteJid?.includes('@lid') && !isNonPhoneIdentifier(phone)) {
     messageMetadata.resolvedFromLid = data.key?.remoteJid;
   }
   
@@ -1728,50 +1766,52 @@ async function processMessageWithAI(
     let phoneForContext = phone;
     let phoneForSending = phone;
     
-    if (isLidIdentifier(phone) && instanceName) {
-      // Try one more time to resolve the LID before sending
-      const resolved = await resolveLidToPhone(instanceName, phone);
-      if (resolved && isValidPhoneNumber(resolved)) {
-        phoneForSending = resolved;
-        phoneForContext = resolved;
-        console.log(`[Webhook] LID resolved before sending: ${phone} → ${resolved}`);
-      } else {
-        // Also try DB-based lookup: search for recent incoming messages from this LID
-        // that have been associated with a real phone number in previous conversations
+    if (isNonPhoneIdentifier(phone) && instanceName) {
+      // Try one more time to resolve the identifier before sending
+      if (isLidIdentifier(phone)) {
+        const resolved = await resolveLidToPhone(instanceName, phone);
+        if (resolved && isValidPhoneNumber(resolved)) {
+          phoneForSending = resolved;
+          phoneForContext = resolved;
+          console.log(`[Webhook] LID resolved before sending: ${phone} → ${resolved}`);
+        }
+      }
+      
+      // If still unresolved, try DB-based lookup for previous messages from this same identifier
+      if (isNonPhoneIdentifier(phoneForSending)) {
         try {
-          const lidValue = phone.replace('lid:', '');
+          const identifierValue = isLidIdentifier(phone) ? phone.replace('lid:', '') : phone.replace('jid:', '');
           const recentMessages = await db.whatsappMessage.findMany({
             where: {
               accountId,
-              direction: 'incoming',
-              createdAt: { gt: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) }, // Last 7 days
+              direction: { in: ['incoming', 'outgoing'] },
+              createdAt: { gt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) }, // Last 30 days
             },
             select: { clientPhone: true, metadata: true },
-            take: 50,
+            take: 100,
             orderBy: { createdAt: 'desc' },
           });
           
-          // Look for messages where the metadata contains the original LID
+          // Look for messages where the metadata contains this same identifier and has a real phone
           for (const msg of recentMessages) {
             const meta = msg.metadata as Record<string, unknown> | null;
-            if (meta?.originalLid === lidValue || meta?.lidIdentifier === phone) {
-              // Found a previous message from this LID that was stored with a real phone
-              if (msg.clientPhone && !isLidIdentifier(msg.clientPhone) && isValidPhoneNumber(msg.clientPhone.replace(/\D/g, ''))) {
+            if (meta?.originalLid === identifierValue || meta?.lidIdentifier === phone || meta?.jidIdentifier === phone || meta?.resolvedFromLid?.includes(identifierValue)) {
+              if (msg.clientPhone && !isNonPhoneIdentifier(msg.clientPhone) && isValidPhoneNumber(msg.clientPhone.replace(/\D/g, ''))) {
                 phoneForSending = msg.clientPhone;
                 phoneForContext = msg.clientPhone;
-                setCachedLidPhone(phone, msg.clientPhone);
-                console.log(`[Webhook] LID resolved via DB metadata lookup: ${phone} → ${msg.clientPhone}`);
+                if (isLidIdentifier(phone)) setCachedLidPhone(phone, msg.clientPhone);
+                console.log(`[Webhook] Identifier resolved via DB metadata lookup: ${phone} → ${msg.clientPhone}`);
                 break;
               }
             }
           }
         } catch (dbErr) {
-          console.log(`[Webhook] DB-based LID lookup failed:`, dbErr);
+          console.log(`[Webhook] DB-based identifier lookup failed:`, dbErr);
         }
-        
-        if (isLidIdentifier(phoneForSending)) {
-          console.warn(`[Webhook] ⚠️ Cannot fully resolve LID ${phone} - will attempt JID-based sending`);
-        }
+      }
+      
+      if (isNonPhoneIdentifier(phoneForSending)) {
+        console.warn(`[Webhook] ⚠️ Cannot fully resolve ${phone} - will attempt JID-based sending via originalJid: ${originalJid}`);
       }
     }
 
@@ -1827,23 +1867,10 @@ async function processMessageWithAI(
         return;
       }
       
-      // ADDITIONAL DEDUP: Also check for ANY outgoing message to this phone in the last 10 seconds
-      // This catches cases where the content differs slightly (e.g., different timestamps) but
-      // the message is essentially a duplicate from a race condition
-      const recentAnyOutgoing = await db.whatsappMessage.findFirst({
-        where: {
-          accountId,
-          clientPhone: phoneForContext,
-          direction: 'outgoing',
-          createdAt: { gt: new Date(Date.now() - 10_000) }, // Last 10 seconds
-        },
-        orderBy: { createdAt: 'desc' },
-      });
-      
-      if (recentAnyOutgoing) {
-        console.log(`[Webhook] ⚠️ Skipping outgoing message - another message was just sent to ${phoneForContext} at ${recentAnyOutgoing.createdAt.toISOString()}`);
-        return;
-      }
+      // REMOVED: The aggressive 10-second ANY-outgoing dedup was blocking legitimate
+      // responses to different messages from the same contact. The content-based dedup
+      // above (60 seconds, same content) is sufficient to prevent duplicates.
+      // If race conditions occur, the processing lock already handles them.
       
       const savedMessage = await db.whatsappMessage.create({
         data: {
@@ -1856,7 +1883,7 @@ async function processMessageWithAI(
           appointmentId: appointmentId || undefined,
           metadata: { 
             autoReply: true,
-            originalIdentifier: isLidIdentifier(phone) ? phone : undefined,
+            originalIdentifier: isNonPhoneIdentifier(phone) ? phone : undefined,
             processingTimeMs: aiTime,
             bookingCreated: !!appointmentId,
             appointmentId: appointmentId || undefined,
@@ -1868,7 +1895,7 @@ async function processMessageWithAI(
       let finalSendResult: { success: boolean; error?: string } = { success: false, error: 'No sending method available' };
       let sentViaMethod = 'none';
       
-      if (!isLidIdentifier(phoneForSending) && isValidPhoneNumber(phoneForSending.replace(/\D/g, ''))) {
+      if (!isNonPhoneIdentifier(phoneForSending) && isValidPhoneNumber(phoneForSending.replace(/\D/g, ''))) {
         // We have a valid real phone number
         if (hasPixData && pixInfo) {
           // PIX payment available - use the multi-step PIX message sender
@@ -1916,42 +1943,71 @@ async function processMessageWithAI(
           }
         }
       } else if (originalJid && instanceName) {
-        // Phone is still a LID or invalid - try multiple JID formats
-        console.log(`[Webhook] 📤 LID/unresolved phone, attempting JID-based sending for ${originalJid}...`);
+        // Phone is still a LID or invalid - try JID-based sending
+        console.log(`[Webhook] 📤 LID/unresolved phone (${phoneForSending}), attempting JID-based sending for ${originalJid}...`);
         
-        // Try 1: If originalJid is @lid, try constructing @s.whatsapp.net from LID digits
-        // (This rarely works but worth trying)
-        if (originalJid.includes('@lid')) {
-          const lidDigits = originalJid.split('@')[0];
-          // Only try if the digits look like they could be a phone number
-          if (isValidPhoneNumber(lidDigits)) {
-            const swhatsappJid = `${lidDigits}@s.whatsapp.net`;
-            console.log(`[Webhook] 📤 Trying @s.whatsapp.net format: ${swhatsappJid}...`);
-            const swhatsappResult = await sendWhatsAppMessageToJid(instanceName, swhatsappJid, response);
-            if (swhatsappResult.success) {
-              finalSendResult = swhatsappResult;
-              sentViaMethod = 'lid-to-s.whatsapp.net';
-              console.log(`[Webhook] ✅ Message sent successfully to ${swhatsappJid}`);
+        // Try 1: Send directly to the original JID FIRST (most reliable for @lid contacts)
+        // Evolution API supports sending directly to @lid JIDs - this is the primary method
+        console.log(`[Webhook] 📤 Attempt 1: Sending directly to original JID ${originalJid}...`);
+        const jidResult = await sendWhatsAppMessageToJid(instanceName, originalJid, response);
+        if (jidResult.success) {
+          finalSendResult = jidResult;
+          sentViaMethod = 'original-jid';
+          console.log(`[Webhook] ✅ Message sent successfully to JID ${originalJid}`);
+        } else {
+          console.error(`[Webhook] ❌ Failed to send to JID ${originalJid}: ${jidResult.error}`);
+          
+          // Try 2: If originalJid is @lid, try constructing @s.whatsapp.net from LID digits
+          if (originalJid.includes('@lid')) {
+            const lidDigits = originalJid.split('@')[0];
+            if (isValidPhoneNumber(lidDigits)) {
+              const swhatsappJid = `${lidDigits}@s.whatsapp.net`;
+              console.log(`[Webhook] 📤 Attempt 2: Trying @s.whatsapp.net format: ${swhatsappJid}...`);
+              const swhatsappResult = await sendWhatsAppMessageToJid(instanceName, swhatsappJid, response);
+              if (swhatsappResult.success) {
+                finalSendResult = swhatsappResult;
+                sentViaMethod = 'lid-to-s.whatsapp.net';
+                console.log(`[Webhook] ✅ Message sent successfully to ${swhatsappJid}`);
+              }
             }
           }
-        }
-        
-        // Try 2: Send directly to the original JID
-        if (!finalSendResult.success) {
-          console.log(`[Webhook] 📤 Sending directly to original JID ${originalJid}...`);
-          const jidResult = await sendWhatsAppMessageToJid(instanceName, originalJid, response);
-          if (jidResult.success) {
-            finalSendResult = jidResult;
-            sentViaMethod = 'original-jid';
-            console.log(`[Webhook] ✅ Message sent successfully to JID ${originalJid}`);
-          } else {
-            console.error(`[Webhook] ❌ Failed to send to JID ${originalJid}: ${jidResult.error}`);
-            finalSendResult = jidResult;
+          
+          // Try 3: If we have a phoneForSending that looks partially valid, try it with @s.whatsapp.net
+          if (!finalSendResult.success) {
+            const phoneDigits = phoneForSending.replace(/\D/g, '');
+            if (phoneDigits.length >= 10 && phoneDigits.length <= 15) {
+              const phoneWithCountryCode = phoneDigits.startsWith('55') ? phoneDigits : '55' + phoneDigits;
+              const swhatsappJid = `${phoneWithCountryCode}@s.whatsapp.net`;
+              console.log(`[Webhook] 📤 Attempt 3: Trying phone-based @s.whatsapp.net: ${swhatsappJid}...`);
+              const phoneResult = await sendWhatsAppMessageToJid(instanceName, swhatsappJid, response);
+              if (phoneResult.success) {
+                finalSendResult = phoneResult;
+                sentViaMethod = 'phone-s.whatsapp.net';
+                console.log(`[Webhook] ✅ Message sent successfully to ${swhatsappJid}`);
+              } else {
+                finalSendResult = phoneResult;
+              }
+            }
           }
         }
       } else {
         // No JID available and no valid phone - mark as failed
         console.warn(`[Webhook] ⚠️ AI response saved but NOT sent - could not resolve LID and no JID available: ${phone}`);
+        // Try last-resort: if we have instanceName and any phone digits, attempt @s.whatsapp.net
+        if (instanceName && phoneForSending) {
+          const phoneDigits = phoneForSending.replace(/\D/g, '');
+          if (phoneDigits.length >= 10) {
+            const phoneWithCountryCode = phoneDigits.startsWith('55') ? phoneDigits : '55' + phoneDigits;
+            const swhatsappJid = `${phoneWithCountryCode}@s.whatsapp.net`;
+            console.log(`[Webhook] 📤 Last resort: Trying ${swhatsappJid}...`);
+            const lastResortResult = await sendWhatsAppMessageToJid(instanceName, swhatsappJid, response);
+            if (lastResortResult.success) {
+              finalSendResult = lastResortResult;
+              sentViaMethod = 'last-resort-s.whatsapp.net';
+              console.log(`[Webhook] ✅ Last resort message sent successfully to ${swhatsappJid}`);
+            }
+          }
+        }
       }
       
       // Update message status in database

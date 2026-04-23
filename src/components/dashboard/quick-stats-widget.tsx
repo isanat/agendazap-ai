@@ -12,11 +12,13 @@ import {
   DollarSign,
   Award,
   ArrowUpRight,
-  ArrowDownRight
+  ArrowDownRight,
+  Loader2
 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Progress } from '@/components/ui/progress'
 import { cn } from '@/lib/utils'
+import { authFetch } from '@/lib/auth-fetch'
 
 interface QuickStatsWidgetProps {
   accountId?: string | null
@@ -166,21 +168,105 @@ function StatItem({
 
 export function QuickStatsWidget({ accountId }: QuickStatsWidgetProps) {
   const [stats, setStats] = useState<WidgetStats>({
-    todayGoal: 10,
-    todayCompleted: 7,
-    weekGoal: 50,
-    weekCompleted: 35,
-    streak: 5,
-    efficiency: 85,
-    topService: 'Corte Feminino',
-    topProfessional: 'Maria Silva'
+    todayGoal: 0,
+    todayCompleted: 0,
+    weekGoal: 0,
+    weekCompleted: 0,
+    streak: 0,
+    efficiency: 0,
+    topService: '-',
+    topProfessional: '-'
   })
-  
-  const todayProgress = (stats.todayCompleted / stats.todayGoal) * 100
-  const weekProgress = (stats.weekCompleted / stats.weekGoal) * 100
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!accountId) {
+      setLoading(false)
+      return
+    }
+
+    let cancelled = false
+
+    async function fetchStats() {
+      setLoading(true)
+      setError(null)
+      try {
+        const res = await authFetch(`/api/dashboard/stats?accountId=${accountId}`)
+        if (!res.ok) throw new Error('Failed to fetch stats')
+        const data = await res.json()
+
+        if (cancelled) return
+
+        const todayGoal = (data.stats?.totalProfessionals || 0) * 8 || 10
+        const weekGoal = todayGoal * 6 || 50
+
+        setStats({
+          todayCompleted: data.stats?.todayAppointments || 0,
+          todayGoal,
+          weekCompleted: data.stats?.weekAppointments || 0,
+          weekGoal,
+          efficiency: data.stats?.occupancyRate || 0,
+          topService: data.stats?.topService || '-',
+          topProfessional: data.stats?.topProfessional || '-',
+          streak: 0
+        })
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : 'Unknown error')
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false)
+        }
+      }
+    }
+
+    fetchStats()
+    return () => { cancelled = true }
+  }, [accountId])
+
+  const todayProgress = stats.todayGoal > 0 ? (stats.todayCompleted / stats.todayGoal) * 100 : 0
+  const weekProgress = stats.weekGoal > 0 ? (stats.weekCompleted / stats.weekGoal) * 100 : 0
   
   const animatedToday = useAnimatedCounter(stats.todayCompleted)
   const animatedWeek = useAnimatedCounter(stats.weekCompleted)
+
+  const isEmpty = !loading && stats.todayCompleted === 0 && stats.weekCompleted === 0 && stats.efficiency === 0
+
+  if (loading) {
+    return (
+      <Card className="border-0 shadow-md overflow-hidden">
+        <CardHeader className="pb-2 bg-gradient-to-r from-green-500/5 to-emerald-500/5">
+          <CardTitle className="text-sm font-medium flex items-center gap-2">
+            <Zap className="w-4 h-4 text-green-500" />
+            Resumo Rápido
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="p-4 flex items-center justify-center min-h-[200px]">
+          <Loader2 className="w-6 h-6 text-green-500 animate-spin" />
+        </CardContent>
+      </Card>
+    )
+  }
+
+  if (isEmpty) {
+    return (
+      <Card className="border-0 shadow-md overflow-hidden">
+        <CardHeader className="pb-2 bg-gradient-to-r from-green-500/5 to-emerald-500/5">
+          <CardTitle className="text-sm font-medium flex items-center gap-2">
+            <Zap className="w-4 h-4 text-green-500" />
+            Resumo Rápido
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="p-4 flex flex-col items-center justify-center min-h-[200px] text-center">
+          <Calendar className="w-10 h-10 text-muted-foreground/40 mb-3" />
+          <p className="text-sm text-muted-foreground">Nenhum dado disponível ainda</p>
+          <p className="text-xs text-muted-foreground/60 mt-1">Os dados aparecerão quando houver agendamentos</p>
+        </CardContent>
+      </Card>
+    )
+  }
 
   return (
     <Card className="border-0 shadow-md overflow-hidden">
@@ -236,16 +322,12 @@ export function QuickStatsWidget({ accountId }: QuickStatsWidgetProps) {
             icon={Award}
             label="Sequência de dias"
             value={`${stats.streak} dias`}
-            trend="+2"
-            trendUp
             color="text-yellow-500"
           />
           <StatItem
             icon={Target}
             label="Eficiência"
             value={`${stats.efficiency}%`}
-            trend="+5%"
-            trendUp
             color="text-green-500"
           />
           <StatItem

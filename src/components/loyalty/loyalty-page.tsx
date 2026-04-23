@@ -818,11 +818,20 @@ export function LoyaltyPage() {
               <CardContent className="pt-6">
                 <div className="text-center space-y-2">
                   <p className="text-sm opacity-80">Taxa de Engajamento</p>
-                  <p className="text-4xl font-bold">78%</p>
+                  <p className="text-4xl font-bold">
+                    {clients.length > 0 && stats?.clientsWithPoints
+                      ? Math.round((stats.clientsWithPoints / clients.length) * 100)
+                      : 0}%
+                  </p>
                   <p className="text-xs opacity-70">
                     dos clientes participam do programa
                   </p>
-                  <Progress value={78} className="h-2 bg-white/20 [&>div]:bg-white" />
+                  <Progress 
+                    value={clients.length > 0 && stats?.clientsWithPoints
+                      ? Math.round((stats.clientsWithPoints / clients.length) * 100)
+                      : 0} 
+                    className="h-2 bg-white/20 [&>div]:bg-white" 
+                  />
                 </div>
               </CardContent>
             </Card>
@@ -917,7 +926,7 @@ export function LoyaltyPage() {
                           {formatDate(transaction.createdAt)}
                         </TableCell>
                         <TableCell className="text-right">
-                          <Button variant="ghost" size="icon" className="opacity-0 group-hover:opacity-100 transition-opacity">
+                          <Button variant="ghost" size="icon" className="opacity-30 pointer-events-none" disabled title="Em breve">
                             <MoreVertical className="h-4 w-4" />
                           </Button>
                         </TableCell>

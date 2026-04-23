@@ -84,7 +84,7 @@ export function PerformanceWidget({ accountId }: PerformanceWidgetProps) {
             {
               label: 'Meta Mensal',
               value: data.stats?.monthRevenue || 0,
-              target: 10000,
+              target: data.stats?.monthlyRevenueTarget || 0,
               unit: 'R$',
               trend: data.stats?.growthRate > 0 ? 'up' : 'neutral',
               trendValue: `${data.stats?.growthRate || 0}%`,
@@ -93,7 +93,7 @@ export function PerformanceWidget({ accountId }: PerformanceWidgetProps) {
             },
             {
               label: 'Satisfação',
-              value: 0,
+              value: data.stats?.satisfactionRate ?? -1,
               target: 100,
               unit: '%',
               trend: 'neutral',
@@ -104,7 +104,7 @@ export function PerformanceWidget({ accountId }: PerformanceWidgetProps) {
             {
               label: 'Ocupação',
               value: data.stats?.occupancyRate || 0,
-              target: 85,
+              target: data.stats?.occupancyTarget || 0,
               unit: '%',
               trend: 'neutral',
               trendValue: '-',
@@ -257,7 +257,7 @@ export function PerformanceOverview({ accountId }: PerformanceWidgetProps) {
             {
               label: 'Meta Mensal',
               value: data.stats?.monthRevenue || 0,
-              target: 10000,
+              target: data.stats?.monthlyRevenueTarget || 0,
               unit: 'R$',
               trend: 'neutral',
               trendValue: '-',
@@ -266,7 +266,7 @@ export function PerformanceOverview({ accountId }: PerformanceWidgetProps) {
             },
             {
               label: 'Satisfação',
-              value: 0,
+              value: data.stats?.satisfactionRate ?? -1,
               target: 100,
               unit: '%',
               trend: 'neutral',
@@ -277,7 +277,7 @@ export function PerformanceOverview({ accountId }: PerformanceWidgetProps) {
             {
               label: 'Ocupação',
               value: data.stats?.occupancyRate || 0,
-              target: 85,
+              target: data.stats?.occupancyTarget || 0,
               unit: '%',
               trend: 'neutral',
               trendValue: '-',

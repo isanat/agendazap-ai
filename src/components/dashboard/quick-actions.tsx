@@ -1,5 +1,6 @@
 'use client'
 
+import { useRouter } from 'next/navigation'
 import { motion } from 'framer-motion'
 import { 
   CalendarPlus, 
@@ -19,6 +20,7 @@ interface QuickAction {
   color: string
   bgColor: string
   hoverColor: string
+  href: string
 }
 
 const quickActions: QuickAction[] = [
@@ -28,7 +30,8 @@ const quickActions: QuickAction[] = [
     description: 'Agendar cliente',
     color: 'text-green-600',
     bgColor: 'bg-green-500/10',
-    hoverColor: 'hover:bg-green-500/20'
+    hoverColor: 'hover:bg-green-500/20',
+    href: '/?tab=appointments'
   },
   {
     icon: UserPlus,
@@ -36,7 +39,8 @@ const quickActions: QuickAction[] = [
     description: 'Cadastrar cliente',
     color: 'text-blue-600',
     bgColor: 'bg-blue-500/10',
-    hoverColor: 'hover:bg-blue-500/20'
+    hoverColor: 'hover:bg-blue-500/20',
+    href: '/?tab=clients'
   },
   {
     icon: MessageSquare,
@@ -44,7 +48,8 @@ const quickActions: QuickAction[] = [
     description: 'WhatsApp em massa',
     color: 'text-purple-600',
     bgColor: 'bg-purple-500/10',
-    hoverColor: 'hover:bg-purple-500/20'
+    hoverColor: 'hover:bg-purple-500/20',
+    href: '/?tab=whatsapp'
   },
   {
     icon: DollarSign,
@@ -52,11 +57,14 @@ const quickActions: QuickAction[] = [
     description: 'No-show pendente',
     color: 'text-orange-600',
     bgColor: 'bg-orange-500/10',
-    hoverColor: 'hover:bg-orange-500/20'
+    hoverColor: 'hover:bg-orange-500/20',
+    href: '/?tab=noshow'
   },
 ]
 
 export function QuickActions() {
+  const router = useRouter()
+
   return (
     <Card className="border-0 shadow-lg overflow-hidden relative">
       <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-green-500/5 to-emerald-500/10 rounded-full -translate-y-1/2 translate-x-1/2" />
@@ -84,6 +92,7 @@ export function QuickActions() {
                   action.bgColor,
                   action.hoverColor
                 )}
+                onClick={() => router.push(action.href)}
               >
                 <div className={cn('p-2 rounded-lg', action.bgColor)}>
                   <action.icon className={cn('w-5 h-5', action.color)} />
@@ -102,6 +111,8 @@ export function QuickActions() {
 }
 
 export function QuickActionsCompact() {
+  const router = useRouter()
+
   return (
     <div className="flex flex-wrap gap-2">
       {quickActions.slice(0, 4).map((action, index) => (
@@ -117,6 +128,7 @@ export function QuickActionsCompact() {
             variant="outline"
             size="sm"
             className={cn('gap-2', action.bgColor, action.hoverColor)}
+            onClick={() => router.push(action.href)}
           >
             <action.icon className={cn('w-4 h-4', action.color)} />
             <span className="hidden sm:inline">{action.label}</span>

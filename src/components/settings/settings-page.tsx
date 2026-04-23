@@ -271,6 +271,7 @@ export function SettingsPage() {
   const [settings, setSettings] = useState<SettingsState>(defaultSettings)
   const [isSaving, setIsSaving] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
+  const [services, setServices] = useState<Array<{ id: string; name: string; price: number; durationMinutes: number }>>([])
 
   const loadSettings = async () => {
     try {
@@ -298,6 +299,19 @@ export function SettingsPage() {
             noShowMessage: account.noShowMessage || defaultSettings.noShowMessage,
           })
         }
+      }
+
+      // Also load services for the packages tab
+      const servicesResponse = await authFetch('/api/services')
+      if (servicesResponse.ok) {
+        const servicesData = await servicesResponse.json()
+        const serviceList = servicesData.services || servicesData || []
+        setServices(serviceList.map((s: any) => ({
+          id: s.id,
+          name: s.name,
+          price: s.price || 0,
+          durationMinutes: s.duration || s.durationMinutes || 30,
+        })))
       }
     } catch (error) {
       console.error('Error loading settings:', error)
@@ -794,18 +808,14 @@ export function SettingsPage() {
 
         {/* Service Packages */}
         <TabsContent value="packages">
-          <ServicePackages 
-            services={[
-              { id: '1', name: 'Corte Feminino', price: 80, durationMinutes: 45 },
-              { id: '2', name: 'Hidratação', price: 120, durationMinutes: 60 },
-              { id: '3', name: 'Escova', price: 70, durationMinutes: 45 },
-              { id: '4', name: 'Maquiagem', price: 150, durationMinutes: 60 },
-              { id: '5', name: 'Barba Completa', price: 45, durationMinutes: 30 },
-              { id: '6', name: 'Toalha Quente', price: 25, durationMinutes: 15 },
-              { id: '7', name: 'Manicure', price: 40, durationMinutes: 30 },
-              { id: '8', name: 'Pedicure', price: 45, durationMinutes: 30 },
-            ]}
-          />
+          {services.length > 0 ? (
+            <ServicePackages services={services} />
+          ) : (
+            <div className="text-center py-12 text-muted-foreground">
+              <p className="text-lg font-medium">Nenhum serviço cadastrado</p>
+              <p className="text-sm mt-2">Cadastre serviços na aba "Serviços" para criar pacotes.</p>
+            </div>
+          )}
         </TabsContent>
 
         {/* Loyalty Program */}
