@@ -15,6 +15,7 @@
  */
 
 import { db } from '@/lib/db';
+import { getSalonTimezone, getNowInSalonTz } from '@/lib/booking-validation';
 
 // === TIPOS ===
 
@@ -960,13 +961,14 @@ export async function generateSystemPrompt(
   const salon = await getSalonContext(accountId);
   const client = await getClientContext(clientPhone, accountId);
   
-  const dayNames = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
-  const today = new Date();
-  const dayName = dayNames[today.getDay()];
-  const todayStr = `${today.getDate().toString().padStart(2,'0')}/${(today.getMonth()+1).toString().padStart(2,'0')}`;
+  // Use salon's explicit timezone instead of server timezone (Fix #4)
+  const salonTz = await getSalonTimezone(accountId);
+  const salonNow = getNowInSalonTz(salonTz);
+  const dayName = salonNow.dayName;
+  const todayStr = salonNow.dateStr;
   
   const address = [salon.address, salon.city, salon.state].filter(Boolean).join(', ') || null;
-  const open = salon.workingDays.includes(today.getDay());
+  const open = salon.workingDays.includes(salonNow.dayOfWeek);
   
   // Compact service list: "Manicure R$50 (60min)" instead of bullet+description
   const svc = salon.services.map(s => `${s.name} R$${s.price.toFixed(0)} (${s.durationMinutes}min)`).join(' | ');
@@ -1052,7 +1054,7 @@ export async function generateSystemPrompt(
   let prompt = `Você é Luna, recepcionista virtual do ${salon.businessName}. Simpática, profissional e OBJETIVA.
 
 Salão: ${salon.businessName} | ${address || 'sem endereço'}${salon.whatsappNumber ? ' | WhatsApp: ' + salon.whatsappNumber : ''}
-Horário: ${salon.openingTime}-${salon.closingTime} ${salon.workingDays.map(d => dayNames[d]).join(',')} | Hoje: ${dayName} ${todayStr} ${open ? 'ABERTO' : 'FECHADO'}
+Horário: ${salon.openingTime}-${salon.closingTime} ${salon.workingDays.map(d => dayNames[d]).join(',')} | Hoje: ${dayName} ${todayStr} ${salonNow.timeStr} ${open ? 'ABERTO' : 'FECHADO'} (TZ: ${salonTz})
 ${salon.googleMapsUrl ? 'Maps: ' + salon.googleMapsUrl : ''}
 Serviços: ${svc}
 Profissionais: ${prof || 'não informado'}

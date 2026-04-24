@@ -29,6 +29,7 @@ model Account {
   openingTime            String               @default("09:00")
   closingTime            String               @default("18:00")
   workingDays            String               @default("1,2,3,4,5")
+  timezone               String               @default("America/Sao_Paulo")
   noShowFeeEnabled       Boolean              @default(true)
   noShowFeeAmount        Float                @default(50.0)
   noShowFeeDeadline      Int                  @default(24)

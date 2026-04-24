@@ -4,6 +4,8 @@ import { generateChatCompletion, canAccountUseAI, transcribeAudioBase64, type Ch
 import { generateSystemPrompt, findOrCreateClient, detectNameInMessage, updateClientName, detectPaymentPreference, updateClientPaymentPreference, detectCpfInMessage, updateClientCpf, updateServiceHistory, detectBirthDateInMessage, updateClientBirthDate, detectPhoneNumberInMessage } from '@/lib/ai-context-service';
 import { decryptCredentials } from '@/app/api/integrations/route';
 import { getEvolutionApiConfig, isValidPhoneNumber, isLidIdentifier, isJidIdentifier, isNonPhoneIdentifier, resolveLidToPhone, saveLidMapping, findAccountByInstance, setCachedLidPhone, migrateClientLidToPhone } from '@/lib/lid-resolution';
+import { validateBooking, getBookingErrorMessage, getSalonTimezone, createDateInSalonTz, type BookingValidationResult } from '@/lib/booking-validation';
+import { isApiReady, enqueuePendingMessage, getHealthStatus } from '@/lib/evolution-health';
 
 /**
  * In-memory processing lock to prevent duplicate AI responses.
@@ -1272,9 +1274,38 @@ async function createAppointmentFromBooking(
     time: string;
     paymentMethod: string;
   }
-): Promise<{ success: boolean; appointmentId?: string; appointmentIds?: string[]; error?: string; pixData?: { qrCode?: string; qrCodeBase64?: string; ticketUrl?: string; deepLink?: string }; isPackage?: boolean }> {
+): Promise<{ success: boolean; appointmentId?: string; appointmentIds?: string[]; error?: string; pixData?: { qrCode?: string; qrCodeBase64?: string; ticketUrl?: string; deepLink?: string }; isPackage?: boolean; validationErrors?: BookingValidationResult }> {
   try {
     console.log(`[Webhook] Creating appointment: service="${booking.serviceName}", professional="${booking.professionalName}", date=${booking.date}, time=${booking.time}, payment=${booking.paymentMethod}`);
+    
+    // === PRE-VALIDATION: Validate booking data BEFORE creating anything (Fix #5 + #7) ===
+    const validation = await validateBooking({
+      accountId,
+      serviceName: booking.serviceName,
+      professionalName: booking.professionalName,
+      date: booking.date,
+      time: booking.time,
+      paymentMethod: booking.paymentMethod,
+      clientId,
+    });
+    
+    if (!validation.valid) {
+      const errorMsg = getBookingErrorMessage(validation);
+      console.error(`[Webhook] ❌ Booking validation failed: ${validation.errors.map(e => `${e.code}: ${e.message}`).join('; ')}`);
+      return { 
+        success: false, 
+        error: errorMsg,
+        validationErrors: validation,
+      };
+    }
+    
+    // Log warnings
+    if (validation.warnings.length > 0) {
+      console.log(`[Webhook] ⚠️ Booking validation warnings: ${validation.warnings.join('; ')}`);
+    }
+    
+    // Use timezone-aware datetime from validation
+    const salonTimezone = validation.salonTimezone || 'America/Sao_Paulo';
     
     // === STEP 1: Check if serviceName matches a Package first ===
     let foundPackage = await db.package.findFirst({
@@ -1316,10 +1347,10 @@ async function createAppointmentFromBooking(
         return { success: false, error: `Professional not found: ${booking.professionalName}` };
       }
       
-      // Parse date and time
-      const baseDatetime = new Date(`${booking.date}T${booking.time}:00-03:00`);
+      // Parse date and time using salon's timezone (Fix #4)
+      const baseDatetime = createDateInSalonTz(booking.date, booking.time, salonTimezone);
       if (isNaN(baseDatetime.getTime())) {
-        console.error(`[Webhook] Invalid datetime: ${booking.date}T${booking.time}`);
+        console.error(`[Webhook] Invalid datetime: ${booking.date}T${booking.time} in timezone ${salonTimezone}`);
         return { success: false, error: `Invalid datetime: ${booking.date}T${booking.time}` };
       }
       
@@ -1507,7 +1538,7 @@ async function createAppointmentFromBooking(
               return { success: false, error: `Professional not found: ${booking.professionalName}` };
             }
             
-            const baseDatetime = new Date(`${booking.date}T${booking.time}:00-03:00`);
+            const baseDatetime = createDateInSalonTz(booking.date, booking.time, salonTimezone);
             if (isNaN(baseDatetime.getTime())) {
               return { success: false, error: `Invalid datetime: ${booking.date}T${booking.time}` };
             }
@@ -1629,10 +1660,10 @@ async function createAppointmentFromBooking(
       return { success: false, error: `Professional not found: ${booking.professionalName}` };
     }
     
-    // Parse date and time (handle timezone - use America/Sao_Paulo)
-    const datetime = new Date(`${booking.date}T${booking.time}:00-03:00`);
+    // Parse date and time using salon's timezone (Fix #4 - was hardcoded -03:00)
+    const datetime = createDateInSalonTz(booking.date, booking.time, salonTimezone);
     if (isNaN(datetime.getTime())) {
-      console.error(`[Webhook] Invalid datetime: ${booking.date}T${booking.time}`);
+      console.error(`[Webhook] Invalid datetime: ${booking.date}T${booking.time} in timezone ${salonTimezone}`);
       return { success: false, error: `Invalid datetime: ${booking.date}T${booking.time}` };
     }
     
@@ -2117,8 +2148,9 @@ async function processMessageWithAI(
       // If booking failed, replace the optimistic confirmation with an error message
       if (booking && !bookingResult?.success) {
         // The AI likely said something like "Vou gerar o QR Code PIX" but the booking failed.
-        // Replace references to PIX/QR Code with an honest error message.
+        // Use the validation error message directly (it's already user-friendly from booking-validation.ts)
         const errorMsg = bookingResult?.error || 'Erro ao criar agendamento';
+        const hasValidationErrors = !!bookingResult?.validationErrors;
         
         // Remove common PIX promise phrases from the response
         response = response
@@ -2129,13 +2161,20 @@ async function processMessageWithAI(
           .replace(/✅\s*$/gm, '')
           .trim();
         
-        // Append a user-friendly error message
-        if (errorMsg.includes('Service not found') || errorMsg.includes('not found')) {
+        // Use the validation error message directly if available (already user-friendly)
+        // Otherwise fall back to generic error messages
+        if (hasValidationErrors && errorMsg) {
+          // Validation errors from booking-validation.ts are already user-friendly
+          response += `\n\n⚠️ ${errorMsg}`;
+        } else if (errorMsg.includes('Service not found') || errorMsg.includes('not found')) {
           response += '\n\n⚠️ Desculpe, tive um problema ao confirmar seu agendamento. O serviço solicitado não está disponível no momento. Posso ajudá-lo a escolher outro serviço ou horário? 😊';
-        } else if (errorMsg.includes('Time slot already booked') || errorMsg.includes('conflict')) {
+        } else if (errorMsg.includes('Time slot already booked') || errorMsg.includes('conflict') || errorMsg.includes('ocupado')) {
           response += '\n\n⚠️ Desculpe, esse horário acabou de ser preenchido! Posso verificar outro horário disponível para você? 😊';
-        } else if (errorMsg.includes('Professional not found')) {
+        } else if (errorMsg.includes('Professional not found') || errorMsg.includes('profissional')) {
           response += '\n\n⚠️ Desculpe, o profissional selecionado não está disponível. Posso verificar com outro profissional? 😊';
+        } else if (errorMsg.includes('fechado') || errorMsg.includes('FECHADO') || errorMsg.includes('fora')) {
+          // Business hours / closed day errors - already detailed from validation
+          response += `\n\n⚠️ ${errorMsg}`;
         } else {
           response += '\n\n⚠️ Desculpe, tive um problema técnico ao confirmar seu agendamento. Por favor, tente novamente em instantes ou entre em contato diretamente com o salão. 😊';
         }
@@ -2366,6 +2405,31 @@ async function processMessageWithAI(
           }
         }
       });
+      
+      // Fix #6: If sending failed and the phone is valid (not a LID), enqueue for retry
+      if (!finalSendResult.success && !isNonPhoneIdentifier(phoneForSending) && isValidPhoneNumber(phoneForSending.replace(/\D/g, ''))) {
+        const healthStatus = getHealthStatus();
+        const isApiDown = !healthStatus.isHealthy || 
+          finalSendResult.error?.includes('API error') || 
+          finalSendResult.error?.includes('ECONNREFUSED') ||
+          finalSendResult.error?.includes('ETIMEDOUT') ||
+          finalSendResult.error?.includes('fetch failed');
+        
+        if (isApiDown) {
+          const enqueued = enqueuePendingMessage({
+            accountId,
+            phone: phoneForSending,
+            message: response,
+            messageType: 'text',
+            appointmentId: appointmentId || undefined,
+            maxRetries: 3,
+          });
+          
+          if (enqueued) {
+            console.log(`[Webhook] 📥 Message enqueued for retry (API appears down): ${phoneForSending}`);
+          }
+        }
+      }
       
       // If sending was successful and we resolved the LID to a phone, cache this mapping
       if (finalSendResult.success && isLidIdentifier(phone) && !isLidIdentifier(phoneForSending)) {
