@@ -21,7 +21,7 @@ const globalForPrisma = globalThis as unknown as {
 
 // Check if we have a valid database URL
 function getDatabaseUrl(): string {
-  const databaseUrl = process.env.DATABASE_URL
+  let databaseUrl = process.env.DATABASE_URL
 
   if (!databaseUrl) {
     const msg = 'DATABASE_URL environment variable is required. Please set it in .env file or Vercel environment variables.'
@@ -35,6 +35,26 @@ function getDatabaseUrl(): string {
     console.error('[db.ts] ERROR:', msg)
     globalForPrisma._dbInitError = msg
     throw new Error(msg)
+  }
+
+  // Remove channel_binding=require as it causes connection issues with Prisma
+  // Prisma doesn't fully support channel binding and this param can cause P1001/P1002 errors
+  if (databaseUrl.includes('channel_binding=require')) {
+    databaseUrl = databaseUrl.replace(/channel_binding=require&?/g, '').replace(/[?&]$/, '');
+    console.log('[db.ts] Removed channel_binding=require from DATABASE_URL for Prisma compatibility');
+  }
+
+  // Add connection_timeout if not present (helps with Neon cold starts)
+  // Also add connect_timeout for Prisma to wait longer for Neon to wake up
+  if (!databaseUrl.includes('connect_timeout')) {
+    const separator = databaseUrl.includes('?') ? '&' : '?';
+    databaseUrl += `${separator}connect_timeout=30`;
+  }
+
+  // Add pgbouncer=true if using a pooler URL and not already set
+  // This tells Prisma to use prepared statements compatible with pgBouncer
+  if (databaseUrl.includes('-pooler') && !databaseUrl.includes('pgbouncer')) {
+    databaseUrl += '&pgbouncer=true';
   }
 
   globalForPrisma._dbInitError = null
