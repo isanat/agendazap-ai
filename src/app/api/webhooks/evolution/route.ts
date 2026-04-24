@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { db } from '@/lib/db';
+import { db, withDbRetry, resetDbConnection } from '@/lib/db';
 import { generateChatCompletion, canAccountUseAI, transcribeAudioBase64, type ChatMessage } from '@/lib/ai-provider-service';
 import { generateSystemPrompt, findOrCreateClient, detectNameInMessage, updateClientName, detectPaymentPreference, updateClientPaymentPreference, detectCpfInMessage, updateClientCpf, updateServiceHistory, detectBirthDateInMessage, updateClientBirthDate, detectPhoneNumberInMessage } from '@/lib/ai-context-service';
 import { decryptCredentials } from '@/app/api/integrations/route';
@@ -43,6 +43,24 @@ setInterval(() => {
     }
   }
 }, 60_000);
+
+/**
+ * Check if an error message indicates a database connection problem.
+ * Used to decide whether to return 500 (so Evolution API retries) vs continue processing.
+ */
+function isDbConnectionErrorFromMessage(msg: string): boolean {
+  return msg.includes("Can't reach database server") ||
+    msg.includes("Connection timed out") ||
+    msg.includes("connection pool") ||
+    msg.includes("ECONNREFUSED") ||
+    msg.includes("ECONNRESET") ||
+    msg.includes("P1001") ||
+    msg.includes("P1002") ||
+    msg.includes("P1008") ||
+    msg.includes("P1011") ||
+    msg.includes("P1017") ||
+    msg.includes("P2024");
+}
 
 /**
  * Verify webhook request authenticity
@@ -761,27 +779,33 @@ async function processIncomingMessage(
   const messageId = data.key?.id;
   if (messageId) {
     try {
-      // Check if already processed
-      const existing = await db.processedMessage.findUnique({ where: { messageId } });
+      // Check if already processed — with retry for Neon cold starts
+      const existing = await withDbRetry(() => db.processedMessage.findUnique({ where: { messageId } }));
       if (existing) {
         console.log(`[Webhook] Skipping duplicate message: ${messageId}`);
         return;
       }
       // Create the record to mark as processing
-      await db.processedMessage.create({
+      await withDbRetry(() => db.processedMessage.create({
         data: {
           messageId,
           accountId: '', // Will be updated after we find the account
           expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
         }
-      });
+      }));
     } catch (err: any) {
       // P2002 = unique constraint violation = duplicate (race condition)
       if (err?.code === 'P2002' || String(err).includes('Unique') || String(err).includes('constraint')) {
         console.log(`[Webhook] Skipping duplicate message: ${messageId}`);
         return;
       }
-      console.warn(`[Webhook] Could not record processed message: ${err?.message || err}`);
+      console.warn(`[Webhook] Could not record processed message after retries: ${err?.message || err}`);
+      // If DB is truly unreachable, don't process — we'd lose dedup protection
+      // and potentially create duplicate bookings
+      if (isDbConnectionErrorFromMessage(err?.message || String(err))) {
+        console.error(`[Webhook] ❌ Database unreachable, cannot safely process message. Evolution API will retry.`);
+        throw err; // Let POST handler return 500 so Evolution API retries
+      }
     }
   }
   
@@ -977,7 +1001,7 @@ async function processIncomingMessage(
     }
   }
 
-  const accountId = await findAccountByInstance(instanceName);
+  const accountId = await withDbRetry(() => findAccountByInstance(instanceName!));
   if (!accountId) {
     console.log('[Webhook] No account found for instance:', instanceName);
     return;
@@ -1038,7 +1062,7 @@ async function processIncomingMessage(
 
   // AUTO-CREATE CLIENT: Find or create client with phone number
   const pushName = data.pushName || undefined;
-  const clientId = await findOrCreateClient(accountId, phone, pushName);
+  const clientId = await withDbRetry(() => findOrCreateClient(accountId!, phone!, pushName));
 
   // UPDATE CLIENT LID INFO: If we have a LID (from the original JID), update the Client record
   // This handles both resolved and unresolved LIDs, and migrates existing lid:XXX phone entries
@@ -1184,7 +1208,7 @@ async function processIncomingMessage(
     messageMetadata.resolvedFromLid = data.key?.remoteJid;
   }
   
-  await db.whatsappMessage.create({
+  await withDbRetry(() => db.whatsappMessage.create({
     data: {
       accountId,
       clientPhone: phone,
@@ -1194,20 +1218,20 @@ async function processIncomingMessage(
       status: 'received',
       metadata: JSON.parse(JSON.stringify(messageMetadata)),
     }
-  });
+  }));
 
   // Update last AI interaction
-  await db.client.update({
+  await withDbRetry(() => db.client.update({
     where: { id: clientId },
     data: { lastAiInteraction: new Date() }
-  });
+  }));
 
   // Update the processed message record with the correct accountId
   if (messageId) {
-    await db.processedMessage.updateMany({
+    await withDbRetry(() => db.processedMessage.updateMany({
       where: { messageId },
       data: { accountId }
-    }).catch(() => {}); // Don't fail if update fails
+    })).catch(() => {}); // Don't fail if update fails
   }
 
   // Process message with AI
@@ -2438,7 +2462,7 @@ async function processMessageWithAI(
       // above (60 seconds, same content) is sufficient to prevent duplicates.
       // If race conditions occur, the processing lock already handles them.
       
-      const savedMessage = await db.whatsappMessage.create({
+      const savedMessage = await withDbRetry(() => db.whatsappMessage.create({
         data: {
           accountId,
           clientPhone: phoneForContext,
@@ -2455,7 +2479,7 @@ async function processMessageWithAI(
             appointmentId: appointmentId || undefined,
           }
         }
-      });
+      }));
 
       // Send the message via the best available method
       let finalSendResult: { success: boolean; error?: string } = { success: false, error: 'No sending method available' };
@@ -2950,6 +2974,17 @@ export async function POST(request: NextRequest) {
     const errorStack = error instanceof Error ? error.stack?.substring(0, 500) : undefined;
     console.error('[Webhook] Error:', errorMessage);
     if (errorStack) console.error('[Webhook] Stack:', errorStack);
+    
+    // Check if this is a database connection error - return 503 so Evolution API retries
+    if (isDbConnectionErrorFromMessage(errorMessage)) {
+      console.error('[Webhook] ❌ Database connection error - returning 503 so Evolution API retries');
+      return NextResponse.json({ 
+        error: 'Database temporarily unavailable', 
+        retry: true,
+        details: errorMessage.substring(0, 200)
+      }, { status: 503 });
+    }
+    
     // Include more details for debugging LID issues
     const errorDetails = {
       message: errorMessage,

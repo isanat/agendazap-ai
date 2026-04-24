@@ -213,3 +213,92 @@ export async function verifyDatabaseSchema(): Promise<{
     }
   }
 }
+
+/**
+ * Check if an error is a database connection error that can be retried.
+ * Neon databases pause after inactivity, causing P1001/P1002 errors on cold starts.
+ */
+function isDbConnectionError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false
+  const prismaError = error as { code?: string; message?: string }
+  // P1001 = Can't reach database server
+  // P1002 = Connection timed out
+  // P1003 = Database does not exist
+  // P1008 = Connection refused
+  // P1009 = Database already exists
+  // P1010 = Cloud provider rejected the request
+  // P1011 = Error opening a TLS connection
+  // P1017 = Server has closed the connection
+  // P2024 = Timed out fetching a connection from the connection pool
+  const retryableCodes = ['P1001', 'P1002', 'P1008', 'P1011', 'P1017', 'P2024']
+  if (prismaError.code && retryableCodes.includes(prismaError.code)) return true
+  // Also check message for "Can't reach database server" or similar
+  if (prismaError.message && (
+    prismaError.message.includes("Can't reach database server") ||
+    prismaError.message.includes("Connection timed out") ||
+    prismaError.message.includes("connection pool") ||
+    prismaError.message.includes("ECONNREFUSED") ||
+    prismaError.message.includes("ECONNRESET")
+  )) return true
+  return false
+}
+
+/**
+ * Reset the PrismaClient connection to force a new connection on next query.
+ * Useful when the existing connection is stale (e.g., Neon paused the database).
+ */
+export async function resetDbConnection(): Promise<void> {
+  try {
+    if (_db) {
+      await _db.$disconnect().catch(() => {})
+    }
+  } catch { /* ignore */ }
+  _db = null
+  globalForPrisma.prisma = undefined
+}
+
+/**
+ * Execute a database operation with automatic retry on connection errors.
+ * Neon databases pause after inactivity and need retries on cold starts.
+ * 
+ * @param operation The database operation to execute
+ * @param maxRetries Maximum number of retries (default: 3)
+ * @param baseDelayMs Base delay in ms for exponential backoff (default: 1000)
+ * @returns The result of the operation
+ * @throws The last error if all retries fail
+ */
+export async function withDbRetry<T>(
+  operation: () => Promise<T>,
+  maxRetries: number = 3,
+  baseDelayMs: number = 1000
+): Promise<T> {
+  let lastError: unknown = null
+  
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await operation()
+    } catch (error) {
+      lastError = error
+      
+      if (!isDbConnectionError(error)) {
+        // Not a connection error, don't retry
+        throw error
+      }
+      
+      const errorMsg = error instanceof Error ? error.message : 'Unknown error'
+      console.warn(`[db.ts] DB connection error (attempt ${attempt}/${maxRetries}): ${errorMsg}`)
+      
+      if (attempt < maxRetries) {
+        // Exponential backoff: 1s, 2s, 4s
+        const delayMs = baseDelayMs * Math.pow(2, attempt - 1)
+        console.log(`[db.ts] Retrying in ${delayMs}ms...`)
+        await new Promise(resolve => setTimeout(resolve, delayMs))
+        
+        // Reset connection for retry
+        await resetDbConnection()
+      }
+    }
+  }
+  
+  throw lastError
+}
