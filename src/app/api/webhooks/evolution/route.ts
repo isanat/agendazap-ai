@@ -1261,6 +1261,184 @@ function parseBookingCommand(aiResponse: string): {
 }
 
 /**
+ * Parse [CANCELAR:appointmentShortId] from AI response
+ * Returns the cancel data and the cleaned response text (without the marker)
+ */
+function parseCancelCommand(aiResponse: string): {
+  cleanedResponse: string;
+  cancel: {
+    appointmentShortId: string;
+  } | null;
+} {
+  const cancelRegex = /\[CANCELAR:([a-f0-9]{8})\]/i;
+  const match = aiResponse.match(cancelRegex);
+  
+  if (!match) {
+    return { cleanedResponse: aiResponse, cancel: null };
+  }
+  
+  const cancel = {
+    appointmentShortId: match[1].trim().toLowerCase(),
+  };
+  
+  const cleanedResponse = aiResponse.replace(cancelRegex, '').trim();
+  return { cleanedResponse, cancel };
+}
+
+/**
+ * Parse [REAGENDAR:appointmentShortId:YYYY-MM-DD:HH:mm] from AI response
+ * Returns the reschedule data and the cleaned response text (without the marker)
+ */
+function parseRescheduleCommand(aiResponse: string): {
+  cleanedResponse: string;
+  reschedule: {
+    appointmentShortId: string;
+    date: string;
+    time: string;
+  } | null;
+} {
+  const rescheduleRegex = /\[REAGENDAR:([a-f0-9]{8}):(\d{4}-\d{2}-\d{2}):(\d{2}:\d{2})\]/i;
+  const match = aiResponse.match(rescheduleRegex);
+  
+  if (!match) {
+    return { cleanedResponse: aiResponse, reschedule: null };
+  }
+  
+  const reschedule = {
+    appointmentShortId: match[1].trim().toLowerCase(),
+    date: match[2].trim(),
+    time: match[3].trim(),
+  };
+  
+  const cleanedResponse = aiResponse.replace(rescheduleRegex, '').trim();
+  return { cleanedResponse, reschedule };
+}
+
+/**
+ * Cancel an appointment by short ID (first 8 chars)
+ * Only allows cancelling appointments that belong to the given client and are in the future
+ */
+async function cancelAppointmentByShortId(
+  accountId: string,
+  clientId: string,
+  shortId: string
+): Promise<{ success: boolean; error?: string; appointmentInfo?: string }> {
+  try {
+    // Find the appointment by short ID prefix
+    const appointment = await db.appointment.findFirst({
+      where: {
+        id: { startsWith: shortId },
+        clientId,
+        accountId,
+        status: { in: ['scheduled', 'confirmed', 'pending'] },
+      },
+      include: {
+        Service: true,
+        Professional: true,
+      },
+    });
+    
+    if (!appointment) {
+      return { success: false, error: 'Agendamento não encontrado ou já cancelado.' };
+    }
+    
+    // Cancel the appointment
+    await db.appointment.update({
+      where: { id: appointment.id },
+      data: {
+        status: 'cancelled',
+        cancelledAt: new Date(),
+        cancellationReason: 'Cancelado pelo cliente via WhatsApp',
+      },
+    });
+    
+    const info = `${appointment.Service?.name || 'Serviço'} com ${appointment.Professional?.name || 'profissional'} em ${appointment.datetime.toLocaleDateString('pt-BR')} às ${appointment.datetime.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`;
+    
+    console.log(`[Webhook] ✅ Appointment cancelled: ${appointment.id} - ${info}`);
+    return { success: true, appointmentInfo: info };
+  } catch (error) {
+    console.error(`[Webhook] ❌ Error cancelling appointment:`, error);
+    return { success: false, error: 'Erro ao cancelar agendamento. Tente novamente.' };
+  }
+}
+
+/**
+ * Reschedule an appointment by short ID (first 8 chars)
+ * Only allows rescheduling appointments that belong to the given client and are in the future
+ */
+async function rescheduleAppointmentByShortId(
+  accountId: string,
+  clientId: string,
+  shortId: string,
+  newDate: string,
+  newTime: string
+): Promise<{ success: boolean; error?: string; appointmentInfo?: string; validationErrors?: BookingValidationResult }> {
+  try {
+    // Find the appointment by short ID prefix
+    const appointment = await db.appointment.findFirst({
+      where: {
+        id: { startsWith: shortId },
+        clientId,
+        accountId,
+        status: { in: ['scheduled', 'confirmed', 'pending'] },
+      },
+      include: {
+        Service: true,
+        Professional: true,
+      },
+    });
+    
+    if (!appointment) {
+      return { success: false, error: 'Agendamento não encontrado ou já cancelado.' };
+    }
+    
+    // Validate the new time slot
+    const serviceName = appointment.Service?.name || '';
+    const professionalName = appointment.Professional?.name || '';
+    
+    // Determine payment method from PIX fields or default to in_person
+    const paymentMethod = appointment.pixId ? 'pix' : 'in_person';
+    
+    const validation = await validateBooking({
+      accountId,
+      serviceName,
+      professionalName,
+      date: newDate,
+      time: newTime,
+      paymentMethod,
+      clientId,
+      excludeAppointmentId: appointment.id, // Exclude current appointment from conflict check
+    });
+    
+    if (!validation.valid) {
+      const errorMsg = getBookingErrorMessage(validation);
+      return { success: false, error: errorMsg, validationErrors: validation };
+    }
+    
+    // Use timezone-aware datetime
+    const salonTimezone = validation.salonTimezone || 'America/Sao_Paulo';
+    const newDatetime = createDateInSalonTz(newDate, newTime, salonTimezone);
+    
+    // Update the appointment
+    await db.appointment.update({
+      where: { id: appointment.id },
+      data: {
+        datetime: newDatetime,
+        status: 'confirmed', // Re-confirm after reschedule
+      },
+    });
+    
+    const info = `${serviceName} com ${professionalName} reagendado para ${newDate} às ${newTime}`;
+    
+    console.log(`[Webhook] ✅ Appointment rescheduled: ${appointment.id} - ${info}`);
+    return { success: true, appointmentInfo: info };
+  } catch (error) {
+    console.error(`[Webhook] ❌ Error rescheduling appointment:`, error);
+    return { success: false, error: 'Erro ao reagendar. Tente novamente.' };
+  }
+}
+
+/**
  * Create an appointment from a parsed booking command
  * Also creates PIX payment if Mercado Pago is connected and payment method is pix
  */
@@ -2121,7 +2299,45 @@ async function processMessageWithAI(
 
     if (rawResponse) {
       // Parse booking command from AI response
-      const { cleanedResponse, booking } = parseBookingCommand(rawResponse);
+      let { cleanedResponse, booking } = parseBookingCommand(rawResponse);
+      
+      // Parse cancel command from AI response
+      let cancelResult: Awaited<ReturnType<typeof cancelAppointmentByShortId>> | undefined;
+      const cancelParsed = parseCancelCommand(cleanedResponse);
+      cleanedResponse = cancelParsed.cleanedResponse;
+      
+      // Parse reschedule command from AI response
+      let rescheduleResult: Awaited<ReturnType<typeof rescheduleAppointmentByShortId>> | undefined;
+      const rescheduleParsed = parseRescheduleCommand(cleanedResponse);
+      cleanedResponse = rescheduleParsed.cleanedResponse;
+      
+      // Process CANCEL command
+      if (cancelParsed.cancel) {
+        console.log(`[Webhook] 🗑️ Cancel command detected: id=${cancelParsed.cancel.appointmentShortId}`);
+        cancelResult = await cancelAppointmentByShortId(accountId, clientId, cancelParsed.cancel.appointmentShortId);
+        if (cancelResult.success) {
+          console.log(`[Webhook] ✅ Appointment cancelled successfully: ${cancelResult.appointmentInfo}`);
+        } else {
+          console.error(`[Webhook] ❌ Failed to cancel appointment: ${cancelResult.error}`);
+        }
+      }
+      
+      // Process RESCHEDULE command
+      if (rescheduleParsed.reschedule) {
+        console.log(`[Webhook] 🔄 Reschedule command detected: id=${rescheduleParsed.reschedule.appointmentShortId} → ${rescheduleParsed.reschedule.date} ${rescheduleParsed.reschedule.time}`);
+        rescheduleResult = await rescheduleAppointmentByShortId(
+          accountId,
+          clientId,
+          rescheduleParsed.reschedule.appointmentShortId,
+          rescheduleParsed.reschedule.date,
+          rescheduleParsed.reschedule.time
+        );
+        if (rescheduleResult.success) {
+          console.log(`[Webhook] ✅ Appointment rescheduled successfully: ${rescheduleResult.appointmentInfo}`);
+        } else {
+          console.error(`[Webhook] ❌ Failed to reschedule appointment: ${rescheduleResult.error}`);
+        }
+      }
       
       // Create appointment if booking command was found
       let appointmentId: string | undefined;
@@ -2144,6 +2360,18 @@ async function processMessageWithAI(
       // Build the response - PIX info is now sent as separate messages via sendPixPaymentMessage
       // so we keep the AI response clean and focused on the appointment confirmation
       let response = cleanedResponse;
+      
+      // If cancel failed, add error message
+      if (cancelParsed.cancel && cancelResult && !cancelResult.success) {
+        response += `\n\n⚠️ ${cancelResult.error}`;
+        console.log(`[Webhook] 📝 Modified response to include cancel error: "${cancelResult.error}"`);
+      }
+      
+      // If reschedule failed, add error message
+      if (rescheduleParsed.reschedule && rescheduleResult && !rescheduleResult.success) {
+        response += `\n\n⚠️ ${rescheduleResult.error}`;
+        console.log(`[Webhook] 📝 Modified response to include reschedule error: "${rescheduleResult.error}"`);
+      }
       
       // If booking failed, replace the optimistic confirmation with an error message
       if (booking && !bookingResult?.success) {

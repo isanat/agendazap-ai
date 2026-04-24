@@ -795,11 +795,15 @@ export async function getClientContext(
     cancellationReason: apt.cancellationReason || null
   }));
 
-  // Upcoming appointments
+  // Upcoming appointments (include TODAY's appointments even if time has passed)
+  // Use start of today as the cutoff so that today's past appointments are still shown
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  
   const upcomingAppointments = await db.appointment.findMany({
     where: {
       clientId: client.id,
-      datetime: { gte: new Date() },
+      datetime: { gte: todayStart },
       status: { in: ['scheduled', 'confirmed', 'pending'] }
     },
     orderBy: { datetime: 'asc' },
@@ -1017,9 +1021,9 @@ export async function generateSystemPrompt(
       .join(', ');
     if (lastSvc) parts.push(`Histórico: ${lastSvc}`);
     
-    // Upcoming (max 2)
-    const upc = client.upcomingAppointments.slice(0, 2)
-      .map(a => `${a.serviceName} ${formatDate(a.date)} ${formatTime(a.date)}`)
+    // Upcoming appointments (max 5) - include ID for cancel/reschedule
+    const upc = client.upcomingAppointments.slice(0, 5)
+      .map(a => `${a.serviceName} ${formatDate(a.date)} ${formatTime(a.date)}(id:${a.id.slice(0,8)})`)
       .join(', ');
     if (upc) parts.push(`Agendado: ${upc}`);
     
@@ -1067,6 +1071,23 @@ REGRAS IMPORTANTES:
 3. Se o cliente tem agendamentos futuros, MENCIONE eles antes de criar novos.
 4. Se o cliente quer agendar para outra pessoa, pergunte o NOME e TELEFONE dessa pessoa.
 5. Cliente novo→pergunte nome. Sem CPF e quer PIX→pergunte CPF ANTES de agendar.
+6. QUANDO O CLIENTE PERGUNTAR SOBRE SEUS AGENDAMENTOS ("tenho horário?", "marquei algo?", "meus agendamentos"), CONSULTE o campo "Agendado:" acima e RESPONDA com os agendamentos existentes. Se não houver agendamentos, diga que não há agendamentos futuros e ofereça ajuda para agendar.
+7. NUNCA responda com lista de serviços quando o cliente pergunta sobre SEUS agendamentos existentes.
+8. Se o cliente quiser CANCELAR um agendamento, confirme qual agendamento e inclua [CANCELAR:id].
+9. Se o cliente quiser REAGENDAR, confirme novo horário e inclua [REAGENDAR:id:YYYY-MM-DD:HH:mm].
+
+FLUXO DE CONSULTA DE AGENDAMENTOS:
+- Cliente pergunta sobre seus agendamentos → Veja "Agendado:" no contexto acima e informe.
+- Se tem agendamento HOJE, destaque: "Você tem agendamento HOJE!"
+- Se NÃO tem agendamentos, diga e ofereça ajudar a agendar.
+
+FLUXO DE CANCELAMENTO:
+1. Confirme QUAL agendamento o cliente quer cancelar
+2. Inclua: [CANCELAR:id] (use o id do agendamento do campo Agendado)
+
+FLUXO DE REAGENDAMENTO:
+1. Confirme QUAL agendamento e o NOVO horário
+2. Inclua: [REAGENDAR:id:YYYY-MM-DD:HH:mm]
 
 FLUXO DE AGENDAMENTO (siga esta ordem, NÃO pule etapas):
 1. Confirme o SERVIÇO com o cliente (use nome exato da lista)
@@ -1077,8 +1098,13 @@ FLUXO DE AGENDAMENTO (siga esta ordem, NÃO pule etapas):
 
 PIX: Sempre que o cliente quiser pagar via PIX, diga "Vou gerar o QR Code PIX!" e inclua [AGENDAR:...:pix]. O sistema gera o QR automaticamente. Se o cliente NÃO tem CPF, PERGUNTE antes de agendar com PIX.
 
-Formato AGENDAR: [AGENDAR:serviço:profissional:YYYY-MM-DD:HH:mm:pagamento]
+COMANDOS DO SISTEMA:
+[AGENDAR:serviço:profissional:YYYY-MM-DD:HH:mm:pagamento] → Criar agendamento
 Ex: [AGENDAR:Manicure:Ana:2026-04-24:10:00:pix]
+[CANCELAR:id] → Cancelar agendamento (id=primeiros 8 chars do id em Agendado)
+Ex: [CANCELAR:abc12345]
+[REAGENDAR:id:YYYY-MM-DD:HH:mm] → Reagendar (id=primeiros 8 chars do id em Agendado)
+Ex: [REAGENDAR:abc12345:2026-04-25:14:00]
 serviço=nome exato da lista ou "Svc1+Svc2" para combos. profissional=nome exato. pagamento=pix|credit_card|debit_card|cash|in_person.`;
 
   return prompt;

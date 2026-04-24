@@ -22,6 +22,7 @@ export interface BookingValidationRequest {
   time: string; // HH:mm
   paymentMethod: string;
   clientId?: string;
+  excludeAppointmentId?: string; // For rescheduling: exclude this appointment from conflict check
 }
 
 export interface BookingValidationResult {
@@ -565,6 +566,7 @@ export async function validateBooking(
         status: { in: ['pending', 'confirmed', 'scheduled'] },
         datetime: { lt: endTime },
         endTime: { gt: datetime },
+        ...(request.excludeAppointmentId ? { id: { not: request.excludeAppointmentId } } : {}),
       }
     });
     
