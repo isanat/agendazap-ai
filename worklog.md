@@ -49,3 +49,37 @@ Stage Summary:
 - All API routes that query Account table are now resilient to missing columns
 - Build is resilient to migration failures (won't block Vercel deployment)
 - Commits: 32d95cd, d1fc2c0 pushed to main
+
+---
+Task ID: 4
+Agent: Main
+Task: Fix RESULT_CODE_KILLED - Chrome killing page due to infinite loop/memory exhaustion
+
+Work Log:
+- Diagnosed the error: RESULT_CODE_KILLED means Chrome killed the tab due to excessive memory/CPU
+- Found ROOT CAUSE: Infinite auth redirect loop in auth-fetch.ts
+  - When session expires, authFetch gets 401, refresh fails, clears partial localStorage
+  - But does NOT clear 'agendazap-storage' (Zustand persist key)
+  - On reload, Zustand rehydrates isAuthenticated=true → dashboard renders → API calls → 401 → loop
+  - Each loop renders 20+ animated components and fires 15+ API calls → Chrome kills tab
+- Fixed auth-fetch.ts: now clears 'agendazap-storage' AND calls useAppStore._resetAll() before redirect
+- Found SECOND BUG: useFetch double-fetch due to isInitialLoad in fetchData dependency array
+  - isInitialLoad=true → fetchData V1 → setIsInitialLoad(false) → fetchData V2 → effect re-fires
+  - Fixed by changing isInitialLoad from useState to useRef
+- Found THIRD BUG: Zustand store over-subscription in page.tsx
+  - `useAppStore()` without selector subscribes to ALL state changes
+  - Changed to individual selectors: `useAppStore((s) => s.sidebarOpen)` etc.
+  - Removed duplicate isAuthenticated hook at bottom
+  - Computed isSuperAdmin/isClient from already-selected user value
+- Found FOURTH BUG: DashboardContent not memoized - re-renders on every parent state change
+  - Wrapped in React.memo
+- Added safety guard: auth loop counter in sessionStorage
+  - If >3 auth checks in same session, force clear all auth data to prevent infinite loops
+
+Stage Summary:
+- RESULT_CODE_KILLED is FIXED - no more infinite auth redirect loops
+- useFetch no longer double-fetches on mount
+- Zustand subscriptions are optimized to prevent unnecessary re-renders
+- DashboardContent is memoized
+- Auth loop safety guard added
+- Commit: 31ce006 pushed to main
