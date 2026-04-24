@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { generateChatCompletion, canAccountUseAI, transcribeAudioBase64, type ChatMessage } from '@/lib/ai-provider-service';
-import { generateSystemPrompt, findOrCreateClient, detectNameInMessage, updateClientName, detectPaymentPreference, updateClientPaymentPreference, detectCpfInMessage, updateClientCpf, updateServiceHistory, detectBirthDateInMessage, updateClientBirthDate } from '@/lib/ai-context-service';
+import { generateSystemPrompt, findOrCreateClient, detectNameInMessage, updateClientName, detectPaymentPreference, updateClientPaymentPreference, detectCpfInMessage, updateClientCpf, updateServiceHistory, detectBirthDateInMessage, updateClientBirthDate, detectPhoneNumberInMessage } from '@/lib/ai-context-service';
 import { decryptCredentials } from '@/app/api/integrations/route';
 import { getEvolutionApiConfig, isValidPhoneNumber, isLidIdentifier, isJidIdentifier, isNonPhoneIdentifier, resolveLidToPhone, saveLidMapping, findAccountByInstance, setCachedLidPhone, migrateClientLidToPhone } from '@/lib/lid-resolution';
 
@@ -125,14 +125,25 @@ async function verifyWebhookRequest(request: NextRequest): Promise<boolean> {
 // getEvolutionApiConfig is imported from @/lib/lid-resolution
 
 /**
- * Send a WhatsApp message directly to a JID (works with LID addresses)
- * This is used as a fallback when the phone number can't be resolved from a LID
+ * Send a WhatsApp message directly to a JID
+ * 
+ * IMPORTANT: @lid JIDs are REJECTED because Evolution API's sendText endpoint
+ * performs an onWhatsApp existence check that fails for LID JIDs, always
+ * returning {"exists":false,"jid":"XXX@lid"} with a 400 error.
+ * 
+ * Only @s.whatsapp.net JIDs (real phone-based addresses) are deliverable.
  */
 async function sendWhatsAppMessageToJid(
   instanceName: string,
   jid: string,
   message: string
 ): Promise<{ success: boolean; error?: string }> {
+  // Reject @lid JIDs immediately - they are NOT deliverable via sendText
+  if (jid.endsWith('@lid')) {
+    console.warn(`[Webhook] ⚠️ Rejected send to @lid JID: ${jid} - WhatsApp LID addresses are not deliverable via Evolution API sendText endpoint`);
+    return { success: false, error: 'Cannot send to @lid JID - WhatsApp LID addresses are not deliverable via Evolution API sendText endpoint' };
+  }
+
   try {
     const systemConfig = await getEvolutionApiConfig();
     if (!systemConfig) {
@@ -148,7 +159,7 @@ async function sendWhatsAppMessageToJid(
         'apikey': systemConfig.apiKey,
       },
       body: JSON.stringify({
-        number: jid, // Send directly to JID format (e.g., "147102780940432@lid")
+        number: jid,
         options: { delay: 1500, presence: 'composing' },
         textMessage: { text: message },
       }),
@@ -162,6 +173,121 @@ async function sendWhatsAppMessageToJid(
     return { success: true };
   } catch (error) {
     return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+  }
+}
+
+/**
+ * Check if a contact exists on WhatsApp via Evolution API
+ * Uses the chat/checkContactExists or chat/whatsappNumber endpoint to find
+ * the real @s.whatsapp.net JID for a contact (especially useful for LID contacts).
+ * 
+ * Returns the real @s.whatsapp.net JID if found, or null if not found.
+ */
+async function checkContactExists(
+  instanceName: string,
+  jid: string
+): Promise<string | null> {
+  try {
+    const systemConfig = await getEvolutionApiConfig();
+    if (!systemConfig) {
+      console.log('[Webhook] checkContactExists: Evolution API not configured');
+      return null;
+    }
+
+    // Method 1: Try chat/whatsappNumber endpoint - checks if number is on WhatsApp
+    // and returns the real JID
+    try {
+      // For @lid JIDs, extract the identifier part
+      const numberToCheck = jid.includes('@') ? jid.split('@')[0] : jid;
+      
+      const response = await fetch(
+        `${systemConfig.apiUrl}/chat/whatsappNumber/${instanceName}?numbers=${encodeURIComponent(numberToCheck)}`,
+        {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+            'apikey': systemConfig.apiKey,
+          },
+        }
+      );
+
+      if (response.ok) {
+        const data = await response.json();
+        const contacts = Array.isArray(data) ? data : [data];
+        
+        for (const contact of contacts) {
+          // Look for a @s.whatsapp.net JID in the response
+          const realJid = contact?.jid || contact?.id || '';
+          if (realJid.includes('@s.whatsapp.net') && contact?.exists !== false) {
+            console.log(`[Webhook] checkContactExists: Found real JID via whatsappNumber: ${realJid}`);
+            return realJid;
+          }
+        }
+      }
+    } catch (err) {
+      console.log(`[Webhook] checkContactExists: whatsappNumber endpoint failed: ${err}`);
+    }
+
+    // Method 2: Try chat/checkContactExists endpoint
+    try {
+      const response = await fetch(
+        `${systemConfig.apiUrl}/chat/checkContactExists/${instanceName}`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'apikey': systemConfig.apiKey,
+          },
+          body: JSON.stringify({ numbers: [jid] }),
+        }
+      );
+
+      if (response.ok) {
+        const data = await response.json();
+        const contacts = Array.isArray(data) ? data : [data];
+        
+        for (const contact of contacts) {
+          const realJid = contact?.jid || contact?.id || '';
+          // Must be @s.whatsapp.net (not @lid) and must exist
+          if (realJid.includes('@s.whatsapp.net') && contact?.exists !== false) {
+            console.log(`[Webhook] checkContactExists: Found real JID via checkContactExists: ${realJid}`);
+            return realJid;
+          }
+        }
+      }
+    } catch (err) {
+      console.log(`[Webhook] checkContactExists: checkContactExists endpoint failed: ${err}`);
+    }
+
+    // Method 3: Try getBaseProfile - sometimes returns the real JID for a LID contact
+    try {
+      const response = await fetch(
+        `${systemConfig.apiUrl}/chat/getBaseProfile/${instanceName}?jid=${encodeURIComponent(jid)}`,
+        {
+          method: 'GET',
+          headers: {
+            'apikey': systemConfig.apiKey,
+          },
+        }
+      );
+
+      if (response.ok) {
+        const data = await response.json();
+        const realJid = data?.id || data?.jid || data?.realJid || '';
+        if (realJid.includes('@s.whatsapp.net')) {
+          console.log(`[Webhook] checkContactExists: Found real JID via getBaseProfile: ${realJid}`);
+          return realJid;
+        }
+      }
+    } catch (err) {
+      console.log(`[Webhook] checkContactExists: getBaseProfile endpoint failed: ${err}`);
+    }
+
+    console.log(`[Webhook] checkContactExists: Could not find real JID for ${jid}`);
+    return null;
+  } catch (error) {
+    console.error(`[Webhook] checkContactExists error: ${error}`);
+    return null;
   }
 }
 
@@ -628,11 +754,18 @@ async function processIncomingMessage(
   }
 
   // CHECK FOR DUPLICATES using ProcessedMessage table
-  // Use optimistic locking: create the processed message record FIRST, then process
-  // This prevents race conditions where two concurrent requests both pass the findUnique check
+  // Use findFirst + create with robust catch to prevent race conditions
+  // where two concurrent requests both pass the findFirst check
   const messageId = data.key?.id;
   if (messageId) {
     try {
+      // Check if already processed
+      const existing = await db.processedMessage.findUnique({ where: { messageId } });
+      if (existing) {
+        console.log(`[Webhook] Skipping duplicate message: ${messageId}`);
+        return;
+      }
+      // Create the record to mark as processing
       await db.processedMessage.create({
         data: {
           messageId,
@@ -641,12 +774,11 @@ async function processIncomingMessage(
         }
       });
     } catch (err: any) {
-      // Unique constraint violation = duplicate message
-      if (err?.code === 'P2002' || String(err).includes('Unique')) {
+      // P2002 = unique constraint violation = duplicate (race condition)
+      if (err?.code === 'P2002' || String(err).includes('Unique') || String(err).includes('constraint')) {
         console.log(`[Webhook] Skipping duplicate message: ${messageId}`);
         return;
       }
-      // Other errors: log but continue (don't block processing)
       console.warn(`[Webhook] Could not record processed message: ${err?.message || err}`);
     }
   }
@@ -991,6 +1123,34 @@ async function processIncomingMessage(
   if (detectedBirthDate) {
     await updateClientBirthDate(clientId, detectedBirthDate);
     console.log(`[Webhook] Birth date detected and updated: ${detectedBirthDate.toLocaleDateString('pt-BR')}`);
+  }
+
+  // DETECT PHONE NUMBER: Check if user is providing their phone number
+  // This is especially important for LID contacts whose phone numbers are unknown
+  if (isNonPhoneIdentifier(phone)) {
+    const detectedPhone = detectPhoneNumberInMessage(messageText);
+    if (detectedPhone && isValidPhoneNumber(detectedPhone)) {
+      console.log(`[Webhook] 📞 Phone number auto-detected in message from LID contact: ${detectedPhone}`);
+      try {
+        // Get the LID value for migration
+        const lidValue = isLidIdentifier(phone) ? phone.replace('lid:', '') : phone.replace('jid:', '');
+        
+        // Update the client record with the real phone number
+        await migrateClientLidToPhone(clientId, lidValue, detectedPhone);
+        
+        // Cache the LID → phone mapping for future lookups
+        setCachedLidPhone(phone, detectedPhone);
+        
+        // Also update the phone variable so subsequent processing uses the real phone
+        phone = detectedPhone;
+        
+        console.log(`[Webhook] 📞 Phone auto-detection successful: LID ${lidValue} → ${detectedPhone}. Client updated, messages migrated.`);
+      } catch (phoneUpdateErr) {
+        console.error(`[Webhook] Error updating client with auto-detected phone: ${phoneUpdateErr instanceof Error ? phoneUpdateErr.message : phoneUpdateErr}`);
+        // Still update the phone variable even if migration failed, so sending can use it
+        phone = detectedPhone;
+      }
+    }
   }
 
   // Save message to database
@@ -2058,9 +2218,15 @@ async function processMessageWithAI(
           }
         }
       } else if (originalJid && instanceName) {
-        // Phone is still a LID or invalid - try JID-based sending
-        console.log(`[Webhook] 📤 LID/unresolved phone (${phoneForSending}), attempting JID-based sending for ${originalJid}...`);
+        // Phone is still a LID or invalid - try resolution-based sending
+        console.log(`[Webhook] 📤 LID/unresolved phone (${phoneForSending}), attempting resolution-based sending for ${originalJid}...`);
         
+        // IMPORTANT: Skip sending to @lid JIDs entirely - they are NOT deliverable via sendText.
+        // The Evolution API performs an onWhatsApp existence check that always fails for LID JIDs.
+        if (originalJid.endsWith('@lid')) {
+          console.warn(`[Webhook] ⚠️ Skipping send to @lid JID ${originalJid} - LID addresses are not deliverable via Evolution API sendText endpoint`);
+        }
+
         // Pre-send LID resolution: Try one more time to resolve the LID right before sending
         // The Evolution API may have cached the contact info since the initial resolution attempt
         if (isLidIdentifier(phoneForSending) && originalJid?.includes('@lid')) {
@@ -2084,78 +2250,57 @@ async function processMessageWithAI(
           }
         }
 
-        // Before trying JID-based sending, try to force the Evolution API to resolve the LID
-        // by calling fetchPhoneNumber which may have cached the mapping
-        if (originalJid?.includes('@lid')) {
-          try {
-            const systemConfig = await getEvolutionApiConfig();
-            if (systemConfig) {
-              const lidValue = originalJid.split('@')[0];
-              await fetch(`${systemConfig.apiUrl}/chat/fetchPhoneNumber/${instanceName}`, {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                  'apikey': systemConfig.apiKey,
-                },
-                body: JSON.stringify({ where: { lidJid: originalJid } }),
-              });
-              // Don't wait for the result, just trigger the cache update
-              console.log(`[Webhook] 📋 Triggered fetchPhoneNumber cache for ${originalJid}`);
-            }
-          } catch (fetchErr) {
-            // Ignore errors, this is best-effort
+        // Step 1: If pre-send LID resolution succeeded, use sendWhatsAppMessage with the real phone
+        if (!isNonPhoneIdentifier(phoneForSending) && isValidPhoneNumber(phoneForSending.replace(/\D/g, ''))) {
+          console.log(`[Webhook] 📤 LID was resolved to real phone, sending via sendWhatsAppMessage to ${phoneForSending}...`);
+          if (hasPixData && pixInfo) {
+            finalSendResult = await sendPixPaymentMessage(accountId, phoneForSending, response, pixInfo);
+            sentViaMethod = finalSendResult.success ? 'lid-resolved-pix' : 'lid-resolved-pix-failed';
+          } else {
+            finalSendResult = await sendWhatsAppMessage(accountId, phoneForSending, response);
+            sentViaMethod = finalSendResult.success ? 'lid-resolved-phone' : 'lid-resolved-phone-failed';
+          }
+          if (finalSendResult.success) {
+            console.log(`[Webhook] ✅ Message sent successfully to resolved phone ${phoneForSending}`);
+          } else {
+            console.error(`[Webhook] ❌ Failed to send to resolved phone ${phoneForSending}: ${finalSendResult.error}`);
           }
         }
         
-        // Try 1: Send directly to the original JID FIRST (most reliable for @lid contacts)
-        // Evolution API supports sending directly to @lid JIDs - this is the primary method
-        console.log(`[Webhook] 📤 Attempt 1: Sending directly to original JID ${originalJid}...`);
-        const jidResult = await sendWhatsAppMessageToJid(instanceName, originalJid, response);
-        if (jidResult.success) {
-          finalSendResult = jidResult;
-          sentViaMethod = 'original-jid';
-          console.log(`[Webhook] ✅ Message sent successfully to JID ${originalJid}`);
-        } else {
-          console.error(`[Webhook] ❌ Failed to send to JID ${originalJid}: ${jidResult.error}`);
+        // Step 2: If phoneForSending is still a LID/JID identifier, try checkContactExists
+        // to find the real @s.whatsapp.net JID via Evolution API
+        if (!finalSendResult.success && isNonPhoneIdentifier(phoneForSending)) {
+          console.log(`[Webhook] 📤 Phone still unresolved (${phoneForSending}), trying checkContactExists for ${originalJid}...`);
           
-          // Try 2: If originalJid is @lid, try constructing @s.whatsapp.net from LID digits
-          if (originalJid.includes('@lid')) {
-            const lidDigits = originalJid.split('@')[0];
-            if (isValidPhoneNumber(lidDigits)) {
-              const swhatsappJid = `${lidDigits}@s.whatsapp.net`;
-              console.log(`[Webhook] 📤 Attempt 2: Trying @s.whatsapp.net format: ${swhatsappJid}...`);
-              const swhatsappResult = await sendWhatsAppMessageToJid(instanceName, swhatsappJid, response);
-              if (swhatsappResult.success) {
-                finalSendResult = swhatsappResult;
-                sentViaMethod = 'lid-to-s.whatsapp.net';
-                console.log(`[Webhook] ✅ Message sent successfully to ${swhatsappJid}`);
-              }
-            }
-          }
+          const realJid = await checkContactExists(instanceName, originalJid);
           
-          // Try 3: If we have a phoneForSending that looks partially valid, try it with @s.whatsapp.net
-          // IMPORTANT: Skip this if phoneForSending is a LID/JID identifier - those digits are NOT phone numbers
-          if (!finalSendResult.success && !isLidIdentifier(phoneForSending) && !isJidIdentifier(phoneForSending)) {
-            const phoneDigits = phoneForSending.replace(/\D/g, '');
-            if (phoneDigits.length >= 10 && phoneDigits.length <= 15) {
-              const phoneWithCountryCode = phoneDigits.startsWith('55') ? phoneDigits : '55' + phoneDigits;
-              const swhatsappJid = `${phoneWithCountryCode}@s.whatsapp.net`;
-              console.log(`[Webhook] 📤 Attempt 3: Trying phone-based @s.whatsapp.net: ${swhatsappJid}...`);
-              const phoneResult = await sendWhatsAppMessageToJid(instanceName, swhatsappJid, response);
-              if (phoneResult.success) {
-                finalSendResult = phoneResult;
-                sentViaMethod = 'phone-s.whatsapp.net';
-                console.log(`[Webhook] ✅ Message sent successfully to ${swhatsappJid}`);
-              } else {
-                finalSendResult = phoneResult;
+          if (realJid && realJid.includes('@s.whatsapp.net')) {
+            // Found the real @s.whatsapp.net JID - send to it
+            console.log(`[Webhook] 📤 Found real JID via checkContactExists: ${realJid}, sending...`);
+            const jidResult = await sendWhatsAppMessageToJid(instanceName, realJid, response);
+            if (jidResult.success) {
+              finalSendResult = jidResult;
+              sentViaMethod = 'checkContact-exists-s.whatsapp.net';
+              console.log(`[Webhook] ✅ Message sent successfully to resolved JID ${realJid}`);
+              
+              // Also extract phone from the JID and update the client record
+              const phoneFromJid = realJid.split('@')[0];
+              if (isValidPhoneNumber(phoneFromJid)) {
+                try {
+                  const lidValue = isLidIdentifier(phoneForSending) ? phoneForSending.replace('lid:', '') : phoneForSending.replace('jid:', '');
+                  await migrateClientLidToPhone(clientId, lidValue, phoneFromJid);
+                } catch (migrateErr) {
+                  console.warn(`[Webhook] Could not migrate client after checkContactExists: ${migrateErr}`);
+                }
               }
             } else {
-              console.log(`[Webhook] 📤 Attempt 3 skipped: phoneForSending digits (${phoneDigits.length}) outside valid range (10-15)`);
+              console.error(`[Webhook] ❌ Failed to send to resolved JID ${realJid}: ${jidResult.error}`);
             }
-          } else if (finalSendResult.success) {
-            // Already succeeded, skip
           } else {
-            console.log(`[Webhook] 📤 Attempt 3 skipped: phoneForSending is a LID/JID identifier (${phoneForSending.substring(0, 20)}...), digits are NOT a phone number`);
+            // Could not find a real JID - message cannot be delivered
+            console.warn(`[Webhook] ⚠️ Could not find real @s.whatsapp.net JID for LID contact ${originalJid}. Message will NOT be delivered.`);
+            finalSendResult = { success: false, error: 'failed_lid_unresolved: Could not resolve LID to a deliverable address' };
+            sentViaMethod = 'failed-lid-unresolved';
           }
         }
       } else {

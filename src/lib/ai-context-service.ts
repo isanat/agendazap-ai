@@ -479,6 +479,123 @@ export async function updateClientBirthDate(
 }
 
 /**
+ * Detect a phone number in a message (Brazilian format)
+ * Returns the clean phone number digits if found, null otherwise.
+ * 
+ * Handles patterns like:
+ * - "meu número é 554199991234"
+ * - "telefone: 41 984195685"
+ * - "11 999991234"
+ * - "whatsapp 41984195685"
+ * - "meu tel é (41) 98419-5685"
+ */
+export function detectPhoneNumberInMessage(message: string): string | null {
+  const lowerMessage = message.toLowerCase();
+  
+  // Check if the message contains phone-related keywords to avoid false positives
+  const phoneKeywords = [
+    'telefone', 'tel', 'número', 'numero', 'celular', 'whatsapp', 'zap',
+    'fone', 'fone:', 'contato', 'contact', 'tel:', 'número:', 'numero:'
+  ];
+  const hasPhoneKeyword = phoneKeywords.some(kw => lowerMessage.includes(kw));
+  
+  // Also check for patterns that strongly indicate a phone number even without keywords
+  // e.g., "554199991234" (12-13 digits starting with 55)
+  
+  // Pattern 1: With keyword prefix - extract number after keyword
+  if (hasPhoneKeyword) {
+    // Remove common prefixes to isolate the number part
+    const cleaned = message.replace(
+      /(?:meu telefone é|meu número é|meu numero é|meu tel é|meu whatsapp é|meu zap é|meu celular é|telefone:|tel:|número:|numero:|celular:|whatsapp:|zap:|fone:|contato:|meu telefone|meu número|meu numero|meu tel|meu whatsapp|meu zap|meu celular)\s*/i,
+      ''
+    ).trim();
+    
+    // Try to find a phone number pattern in the cleaned text
+    // Pattern 1a: Full number with country code: 55XXXXXXXXXXX (12-13 digits)
+    const fullMatch = cleaned.match(/\b(55\d{10,11})\b/);
+    if (fullMatch && isValidPhoneNumberLocal(fullMatch[1])) {
+      return fullMatch[1];
+    }
+    
+    // Pattern 1b: Number with area code and possible separators: XX XXXXX-XXXX or XX 9XXXX-XXXX
+    const areaCodeMatch = cleaned.match(/\b(\d{2})\s*(\d{4,5})[-\s]*(\d{4})\b/);
+    if (areaCodeMatch) {
+      const phone = areaCodeMatch[1] + areaCodeMatch[2] + areaCodeMatch[3];
+      if (isValidPhoneNumberLocal(phone)) {
+        return phone.startsWith('55') ? phone : '55' + phone;
+      }
+    }
+    
+    // Pattern 1c: Number with parentheses area code: (XX) XXXXX-XXXX
+    const parenMatch = cleaned.match(/\((\d{2})\)\s*(\d{4,5})[-\s]*(\d{4})/);
+    if (parenMatch) {
+      const phone = parenMatch[1] + parenMatch[2] + parenMatch[3];
+      if (isValidPhoneNumberLocal(phone)) {
+        return phone.startsWith('55') ? phone : '55' + phone;
+      }
+    }
+    
+    // Pattern 1d: Just digits (10-11 digits for local BR number)
+    const digitsOnly = cleaned.replace(/[^\d]/g, '');
+    if (digitsOnly.length >= 10 && digitsOnly.length <= 13 && isValidPhoneNumberLocal(digitsOnly)) {
+      return digitsOnly.startsWith('55') ? digitsOnly : '55' + digitsOnly;
+    }
+  }
+  
+  // Pattern 2: Without keyword - look for strong phone number patterns
+  // Full Brazilian number with country code: 55XXXXXXXXXXX (12-13 digits)
+  const fullNumberMatch = message.match(/\b(55\d{10,11})\b/);
+  if (fullNumberMatch && isValidPhoneNumberLocal(fullNumberMatch[1])) {
+    return fullNumberMatch[1];
+  }
+  
+  // Formatted number: (XX) XXXXX-XXXX or XX XXXXX-XXXX (strong visual pattern)
+  const formattedMatch = message.match(/\(?\b(\d{2})\)?\s*(\d{4,5})[-\s](\d{4})\b/);
+  if (formattedMatch) {
+    const phone = formattedMatch[1] + formattedMatch[2] + formattedMatch[3];
+    if (isValidPhoneNumberLocal(phone)) {
+      return phone.startsWith('55') ? phone : '55' + phone;
+    }
+  }
+  
+  return null;
+}
+
+/**
+ * Local phone number validation for detectPhoneNumberInMessage
+ * Uses the shared isValidPhoneNumber from lid-resolution if available,
+ * otherwise performs basic validation here.
+ */
+function isValidPhoneNumberLocal(phone: string): boolean {
+  const digits = phone.replace(/\D/g, '');
+  
+  if (digits.length < 10 || digits.length > 15) return false;
+  
+  // Brazilian number with country code
+  if (digits.startsWith('55')) {
+    const localPart = digits.slice(2);
+    const areaCode = localPart.slice(0, 2);
+    if (/^[1-9][0-9]$/.test(areaCode)) {
+      const subscriberNumber = localPart.slice(2);
+      if (subscriberNumber.length >= 8 && subscriberNumber.length <= 9) {
+        return true;
+      }
+    }
+    if (localPart.length >= 8 && localPart.length <= 11) return true;
+  }
+  
+  // Local Brazilian format without country code
+  if (digits.length >= 10 && digits.length <= 11) {
+    const areaCode = digits.slice(0, 2);
+    if (/^[1-9][0-9]$/.test(areaCode)) {
+      return true;
+    }
+  }
+  
+  return false;
+}
+
+/**
  * Detect payment preference in a message
  */
 export function detectPaymentPreference(message: string): string | null {
@@ -877,6 +994,11 @@ export async function generateSystemPrompt(
     if (hints.length > 0) parts.push(`💡 ${hints.join('; ')}`);
     
     if (isLidPhone(client.phone)) parts.push('Pergunte telefone');
+    
+    // LID-specific instruction: add a clear instruction for the AI to naturally ask for phone number
+    if (client.phone.startsWith('lid:') || client.phone.startsWith('jid:')) {
+      parts.push('IMPORTANTE: Telefone pendente (formato LID). Sempre pergunte o telefone de forma natural no início da conversa para enviar confirmações e lembretes');
+    }
     
     ctx = parts.join('. ') + '.';
   } else {
