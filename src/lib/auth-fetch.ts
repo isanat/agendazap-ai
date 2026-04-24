@@ -204,8 +204,16 @@ export async function authFetch(
     } else {
       // Refresh failed - redirect to login
       if (typeof window !== 'undefined') {
+        // CRITICAL: Clear ALL auth storage including Zustand persist,
+        // otherwise Zustand rehydrates isAuthenticated=true causing infinite redirect loop
         localStorage.removeItem('agendazap-user');
         localStorage.removeItem('agendazap-account-id');
+        localStorage.removeItem('agendazap-storage');
+        // Also clear Zustand state in memory
+        try {
+          const { useAppStore } = await import('@/store/app-store');
+          useAppStore.getState()._resetAll();
+        } catch {}
         window.location.replace('/');
       }
     }

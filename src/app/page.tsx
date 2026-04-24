@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, Suspense, useCallback } from 'react'
+import { useEffect, useState, Suspense, useCallback, memo } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
 import { AppSidebar } from '@/components/layout/app-sidebar'
 import { SuperAdminSidebar } from '@/components/layout/superadmin-sidebar'
@@ -50,7 +50,7 @@ import { Loader2 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { toast, Toaster } from 'sonner'
 
-function DashboardContent({ accountId }: { accountId?: string | null }) {
+const DashboardContent = memo(function DashboardContent({ accountId }: { accountId?: string | null }) {
   const router = useRouter()
   const [period, setPeriod] = useState('week')
   
@@ -163,11 +163,18 @@ function DashboardContent({ accountId }: { accountId?: string | null }) {
       </motion.div>
     </motion.div>
   )
-}
+})
 
 function MainPageContent() {
   const searchParams = useSearchParams()
-  const { sidebarOpen, setAuthenticated, setUser, setAccount, user, account } = useAppStore()
+  // Use specific selectors to avoid re-rendering on every store change
+  const sidebarOpen = useAppStore((s) => s.sidebarOpen)
+  const setAuthenticated = useAppStore((s) => s.setAuthenticated)
+  const setUser = useAppStore((s) => s.setUser)
+  const setAccount = useAppStore((s) => s.setAccount)
+  const user = useAppStore((s) => s.user)
+  const account = useAppStore((s) => s.account)
+  const isAuthenticated = useAppStore((s) => s.isAuthenticated)
   const [isLoading, setIsLoading] = useState(true)
   const { showHelp, setShowHelp } = useKeyboardShortcuts()
   
@@ -178,12 +185,30 @@ function MainPageContent() {
 
   // Check auth on mount
   useEffect(() => {
+    // Guard against infinite auth loops: if we've checked auth too many times
+    // in quick succession, force clear and show login
+    const authCheckCount = parseInt(sessionStorage.getItem('agendazap-auth-checks') || '0')
+    if (authCheckCount > 3) {
+      console.warn('[Auth] Too many auth checks, forcing logout to prevent loop')
+      sessionStorage.removeItem('agendazap-auth-checks')
+      localStorage.removeItem('agendazap-storage')
+      localStorage.removeItem('agendazap-user')
+      localStorage.removeItem('agendazap-account-id')
+      useAppStore.getState()._resetAll()
+      setIsLoading(false)
+      return
+    }
+    sessionStorage.setItem('agendazap-auth-checks', String(authCheckCount + 1))
+    // Clear the counter after successful auth
+    const clearCounter = () => sessionStorage.removeItem('agendazap-auth-checks')
+
     const checkAuth = async () => {
       try {
         // First check if already logged in from Zustand persisted state
         const { isAuthenticated, user } = useAppStore.getState()
         if (isAuthenticated && user) {
           setIsLoading(false)
+          clearCounter()
           return
         }
         
@@ -264,6 +289,7 @@ function MainPageContent() {
                 setAccount(accountData)
                 setAuthenticated(true)
                 setIsLoading(false)
+                clearCounter()
                 return
               }
             }
@@ -327,6 +353,7 @@ function MainPageContent() {
             
             setAccount(accountData)
             setAuthenticated(true)
+            clearCounter()
             
             // Also save to localStorage for header-based fallback
             localStorage.setItem('agendazap-user', JSON.stringify({
@@ -433,10 +460,10 @@ function MainPageContent() {
   }
 
   // Check if user is SuperAdmin
-  const isSuperAdmin = useAppStore((state) => state.user?.role === 'superadmin')
+  const isSuperAdmin = user?.role === 'superadmin'
   
   // Check if user is a Client
-  const isClient = useAppStore((state) => state.user?.role === 'client')
+  const isClient = user?.role === 'client'
 
   const renderContent = () => {
     // Client Portal
@@ -503,8 +530,6 @@ function MainPageContent() {
         return <DashboardContent accountId={accountId} />
     }
   }
-
-  const { isAuthenticated } = useAppStore()
 
   // Show auth page if not logged in
   if (!isLoading && !isAuthenticated) {

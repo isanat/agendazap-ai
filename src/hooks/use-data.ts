@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 
 interface UseDataOptions {
   accountId?: string | null
@@ -35,18 +35,21 @@ export function useFetch<T>(
   const [data, setData] = useState<T | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isRefreshing, setIsRefreshing] = useState(false)
-  const [isInitialLoad, setIsInitialLoad] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  // Use a ref instead of state for isInitialLoad to avoid re-creating fetchData
+  const isInitialLoadRef = useRef(true)
+  // Track if this is the first mount to avoid double-fetch
+  const hasFetchedRef = useRef(false)
 
   const fetchData = useCallback(async () => {
     if (!url || options?.enabled === false) {
       setIsLoading(false)
-      setIsInitialLoad(false)
+      isInitialLoadRef.current = false
       return
     }
 
     // If we already have data, this is a refresh (not initial load)
-    const isInitialFetchRequest = isInitialLoad
+    const isInitialFetchRequest = isInitialLoadRef.current
     
     if (isInitialFetchRequest) {
       setIsLoading(true)
@@ -62,7 +65,7 @@ export function useFetch<T>(
       }
       const result = await response.json()
       setData(result)
-      setIsInitialLoad(false)
+      isInitialLoadRef.current = false
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An error occurred')
       console.error('Error fetching data:', err)
@@ -70,13 +73,16 @@ export function useFetch<T>(
       setIsLoading(false)
       setIsRefreshing(false)
     }
-  }, [url, options?.enabled, isInitialLoad])
+  }, [url, options?.enabled])
 
   useEffect(() => {
+    // Reset initial load flag when URL changes
+    isInitialLoadRef.current = !hasFetchedRef.current
     fetchData()
+    hasFetchedRef.current = true
   }, [fetchData])
 
-  return { data, isLoading, isRefreshing, isInitialLoad, error, refetch: fetchData }
+  return { data, isLoading, isRefreshing, isInitialLoad: isInitialLoadRef.current, error, refetch: fetchData }
 }
 
 // Hook for account data
