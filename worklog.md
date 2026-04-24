@@ -228,3 +228,29 @@ Stage Summary:
 - Token limit increased 5x (100K → 500K) at both schema default and existing database records
 - System prompt includes conciseness instructions to reduce per-response token consumption
 - AI should now be functional again for account acc_mo4pje9qiuzyq8jd (101,598 / 500,000 tokens)
+
+---
+Task ID: 7
+Agent: Main
+Task: Fix LID sending (400 error), duplicate ProcessedMessage, phone auto-detect, webhook auth
+
+Work Log:
+- Analyzed webhook logs showing @lid JIDs always fail with 400: {"exists":false}
+- Found root cause: Evolution API's sendText performs onWhatsApp check that fails for @lid JIDs
+- Modified sendWhatsAppMessageToJid() to reject @lid JIDs immediately (no wasted API calls)
+- Added checkContactExists() helper with 3 methods: whatsappNumber, checkContactExists, getBaseProfile
+- Rewrote LID sending cascade: pre-send resolution → phone send → checkContactExists → mark failed
+- Fixed duplicate ProcessedMessage error: added findUnique check before create, robust P2002 catch
+- Added detectPhoneNumberInMessage() in ai-context-service.ts for auto-detecting phones in messages
+- Auto-migration when LID contact provides phone number: updates client + caches mapping
+- AI prompt now includes LID-specific instruction: "Telefone pendente. Sempre pergunte o telefone"
+- Configured webhook authentication: generated secret, added to .env, reconfigured both Evolution API instances
+- Both instances (salao-da-valeria, agendazap-admin) now send x-webhook-secret header
+
+Stage Summary:
+- @lid JIDs are no longer attempted for sending (was always failing with 400)
+- LID contacts go through: resolve → phone send → checkContactExists → mark failed_lid_unresolved
+- Phone auto-detection captures Brazilian phone patterns from LID contact messages
+- ProcessedMessage dedup is more robust (findUnique + create + 3-condition catch)
+- Webhook authentication configured with x-webhook-secret on both instances
+- Committed and pushed as 2b7fcb2
