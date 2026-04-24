@@ -52,11 +52,21 @@ export interface BookingValidationError {
  * Defaults to "America/Sao_Paulo" if not set.
  */
 export async function getSalonTimezone(accountId: string): Promise<string> {
-  const account = await db.account.findUnique({
-    where: { id: accountId },
-    select: { timezone: true }
-  });
-  return account?.timezone || 'America/Sao_Paulo';
+  try {
+    const account = await db.account.findUnique({
+      where: { id: accountId },
+      select: { timezone: true }
+    });
+    return account?.timezone || 'America/Sao_Paulo';
+  } catch (error) {
+    // Column might not exist yet during schema migration
+    const msg = error instanceof Error ? error.message : '';
+    if (msg.includes('does not exist')) {
+      console.warn('[getSalonTimezone] timezone column not yet migrated, using default');
+      return 'America/Sao_Paulo';
+    }
+    throw error;
+  }
 }
 
 /**
@@ -223,15 +233,33 @@ export async function validateBooking(
   const warnings: string[] = [];
   
   // === STEP 0: Get salon context ===
-  const account = await db.account.findUnique({
-    where: { id: request.accountId },
-    select: {
-      timezone: true,
-      openingTime: true,
-      closingTime: true,
-      workingDays: true,
+  let account: { timezone: string | null; openingTime: string; closingTime: string; workingDays: string | null } | null = null;
+  try {
+    account = await db.account.findUnique({
+      where: { id: request.accountId },
+      select: {
+        timezone: true,
+        openingTime: true,
+        closingTime: true,
+        workingDays: true,
+      }
+    });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : '';
+    if (msg.includes('does not exist')) {
+      console.warn('[validateBooking] Schema not fully migrated, querying without timezone');
+      account = await db.account.findUnique({
+        where: { id: request.accountId },
+        select: {
+          openingTime: true,
+          closingTime: true,
+          workingDays: true,
+        }
+      }) as any;
+    } else {
+      throw error;
     }
-  });
+  }
   
   const salonTimezone = account?.timezone || 'America/Sao_Paulo';
   const salonOpeningTime = account?.openingTime || '09:00';

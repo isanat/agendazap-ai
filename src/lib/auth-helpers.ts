@@ -92,11 +92,17 @@ export async function getAuthUser(request: NextRequest): Promise<AuthUser | null
     const jwtUser = await parseJwtSession(request);
     if (jwtUser) {
       // Verify user still exists and is active
+      // Use select instead of include to avoid querying columns that may not exist yet
       const user = await db.user.findUnique({
         where: { id: jwtUser.id },
-        include: { 
-          Account: true,
-          Professional: { include: { Account: true } }
+        select: {
+          id: true,
+          email: true,
+          name: true,
+          role: true,
+          isActive: true,
+          Account: { select: { id: true } },
+          Professional: { select: { id: true, accountId: true } }
         }
       });
 
@@ -122,9 +128,14 @@ export async function getAuthUser(request: NextRequest): Promise<AuthUser | null
     if (headerUser) {
       const user = await db.user.findUnique({
         where: { id: headerUser.id },
-        include: { 
-          Account: true,
-          Professional: { include: { Account: true } }
+        select: {
+          id: true,
+          email: true,
+          name: true,
+          role: true,
+          isActive: true,
+          Account: { select: { id: true } },
+          Professional: { select: { id: true, accountId: true } }
         }
       });
 

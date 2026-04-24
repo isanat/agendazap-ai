@@ -15,11 +15,67 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Find user
-    const user = await db.user.findUnique({
-      where: { email },
-      include: { Account: true }
-    });
+    // Find user with Account - use select to avoid querying columns that may not exist yet
+    // (e.g., Account.timezone, Account.aiAutoReply) during schema migration
+    let user: {
+      id: string;
+      email: string;
+      password: string;
+      name: string;
+      role: string;
+      isActive: boolean;
+      Account: { id: string } | null;
+    } | null = null;
+
+    try {
+      user = await db.user.findUnique({
+        where: { email },
+        select: {
+          id: true,
+          email: true,
+          password: true,
+          name: true,
+          role: true,
+          isActive: true,
+          Account: {
+            select: { id: true }
+          }
+        }
+      });
+    } catch (dbError) {
+      // If select fails (e.g., schema mismatch), try raw SQL as fallback
+      const errorMsg = dbError instanceof Error ? dbError.message : 'Unknown error';
+      console.error('[Login] Prisma query failed:', errorMsg);
+
+      if (errorMsg.includes('does not exist')) {
+        // Schema migration needed - try auto-migrating and retry once
+        console.log('[Login] Schema mismatch detected, attempting auto-migration...');
+        try {
+          const { ensureSchemaColumns } = await import('@/lib/db-migrate');
+          await ensureSchemaColumns();
+        } catch (migrateError) {
+          console.error('[Login] Auto-migration failed:', migrateError);
+        }
+
+        // Retry the query
+        user = await db.user.findUnique({
+          where: { email },
+          select: {
+            id: true,
+            email: true,
+            password: true,
+            name: true,
+            role: true,
+            isActive: true,
+            Account: {
+              select: { id: true }
+            }
+          }
+        });
+      } else {
+        throw dbError;
+      }
+    }
 
     if (!user) {
       return NextResponse.json(
@@ -55,7 +111,18 @@ export async function POST(request: NextRequest) {
 
     // Re-fetch user if we just migrated the password
     const updatedUser = isLegacyHash
-      ? await db.user.findUnique({ where: { id: user.id }, include: { Account: true } })
+      ? await db.user.findUnique({
+          where: { id: user.id },
+          select: {
+            id: true,
+            email: true,
+            password: true,
+            name: true,
+            role: true,
+            isActive: true,
+            Account: { select: { id: true } }
+          }
+        })
       : user;
 
     // Verify password with bcrypt only
@@ -171,7 +238,10 @@ export async function GET(request: NextRequest) {
             // Verify user still exists and is active
             const user = await db.user.findUnique({
               where: { id: payload.userId },
-              include: { Account: true }
+              select: {
+                id: true, email: true, name: true, role: true, isActive: true,
+                Account: { select: { id: true } }
+              }
             });
 
             if (user && user.isActive) {
@@ -198,7 +268,10 @@ export async function GET(request: NextRequest) {
               if (newPayload) {
                 const user = await db.user.findUnique({
                   where: { id: newPayload.userId },
-                  include: { Account: true }
+                  select: {
+                    id: true, email: true, name: true, role: true, isActive: true,
+                    Account: { select: { id: true } }
+                  }
                 });
 
                 if (user && user.isActive) {
@@ -244,7 +317,10 @@ export async function GET(request: NextRequest) {
     if (userId) {
       const user = await db.user.findUnique({
         where: { id: userId },
-        include: { Account: true }
+        select: {
+          id: true, email: true, name: true, role: true, isActive: true,
+          Account: { select: { id: true } }
+        }
       });
 
       if (user && user.isActive) {
