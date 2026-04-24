@@ -1663,6 +1663,30 @@ async function createAppointmentFromBooking(
       return { success: false, error: 'Time slot already booked' };
     }
     
+    // CHECK: Same client already has an appointment for the SAME SERVICE on the SAME DAY
+    // This prevents duplicate bookings like "Corte Masculino at 16:30 AND 19:30"
+    const dayStart = new Date(datetime);
+    dayStart.setHours(0, 0, 0, 0);
+    const dayEnd = new Date(datetime);
+    dayEnd.setHours(23, 59, 59, 999);
+    
+    const sameDaySameService = await db.appointment.findFirst({
+      where: {
+        accountId,
+        clientId,
+        serviceId: foundService.id,
+        status: { in: ['pending', 'confirmed', 'scheduled'] },
+        datetime: { gte: dayStart, lte: dayEnd },
+      }
+    });
+    
+    if (sameDaySameService) {
+      console.log(`[Webhook] Client already has same service booked on same day: ${sameDaySameService.id} at ${sameDaySameService.datetime}`);
+      // Return the existing appointment - don't create a duplicate
+      const existingPixData = sameDaySameService.pixQrCode ? { qrCode: sameDaySameService.pixQrCode || undefined } : undefined;
+      return { success: true, appointmentId: sameDaySameService.id, pixData: existingPixData };
+    }
+    
     // Create the appointment
     const appointment = await db.appointment.create({
       data: {
@@ -2378,9 +2402,9 @@ async function generateAIResponse(
     console.log(`[Webhook] System prompt generated (${systemPrompt.length} chars)`);
     
     // Get conversation history from database (more reliable than in-memory)
-    // Reduced from 10 to 5 messages to avoid Groq rate limit (TPM exceeded with 10 messages)
-    // We fetch 6 and use only the first 5 (excluding the current message which was just saved)
-    const history = await getConversationHistory(accountId, phone, 6);
+    // Fetch 12 messages to keep last 8 for context (after filtering/excluding current)
+    // Increased from 6 to maintain booking flow across multi-turn conversations
+    const history = await getConversationHistory(accountId, phone, 12);
     console.log(`[Webhook] Conversation history: ${history.length} messages`);
     
     // The history includes the current incoming message (just saved to DB).
@@ -2390,7 +2414,7 @@ async function generateAIResponse(
     const previousHistory = history
       .slice(0, -1) // Remove the current message (last in history)
       .filter(m => !m.content.includes('[AGENDAR:')) // Remove booking markers from context
-      .slice(-4); // Keep only last 4 messages to stay within token limits
+      .slice(-8); // Keep last 8 messages for better conversation context (was 4, increased to maintain booking flow)
 
     const messages: ChatMessage[] = [
       { role: 'system', content: systemPrompt },

@@ -707,22 +707,65 @@ export async function getClientContext(
   const normalizedPhone = clientPhone.replace(/\D/g, '');
   const rawLid = extractRawLid(clientPhone);
   
-  // Search by phone, and also by whatsappLid for LID-based clients
-  let client = await db.client.findFirst({
-    where: {
-      accountId,
-      phone: { contains: isLidPhone(clientPhone) ? clientPhone : normalizedPhone.slice(-9) }
-    }
-  });
+  // Search by phone using multiple strategies to avoid format mismatch
+  // The phone might be stored as "5541984195685" but searched as "41984195685"
+  // or vice versa. We try multiple approaches.
+  let client: any = null;
   
-  // If not found by phone and we have a raw LID, search by whatsappLid
-  if (!client && rawLid) {
+  if (isLidPhone(clientPhone)) {
+    // For LID identifiers, search by exact match
     client = await db.client.findFirst({
       where: {
         accountId,
-        whatsappLid: rawLid
+        phone: clientPhone
       }
     });
+    // Also try by whatsappLid
+    if (!client && rawLid) {
+      client = await db.client.findFirst({
+        where: {
+          accountId,
+          whatsappLid: rawLid
+        }
+      });
+    }
+  } else {
+    // For real phone numbers, try multiple search strategies
+    const searchStrategies = [
+      // Strategy 1: Exact match
+      { phone: normalizedPhone },
+      // Strategy 2: Contains last 9 digits (most common)
+      { phone: { contains: normalizedPhone.slice(-9) } },
+      // Strategy 3: Without country code (if phone has 55 prefix)
+      ...(normalizedPhone.startsWith('55') ? [{ phone: { contains: normalizedPhone.slice(2) } }] : []),
+      // Strategy 4: With country code (if phone doesn't have 55)
+      ...(normalizedPhone.length >= 10 && !normalizedPhone.startsWith('55') ? [{ phone: { contains: `55${normalizedPhone}` } }] : []),
+      // Strategy 5: Last 8 digits (landline without 9th digit)
+      { phone: { contains: normalizedPhone.slice(-8) } },
+    ];
+    
+    for (const strategy of searchStrategies) {
+      const found = await db.client.findFirst({
+        where: {
+          accountId,
+          ...strategy
+        }
+      });
+      if (found) {
+        client = found;
+        break;
+      }
+    }
+    
+    // If still not found, try by whatsappLid in case the client was created from a LID
+    if (!client) {
+      client = await db.client.findFirst({
+        where: {
+          accountId,
+          whatsappLid: normalizedPhone
+        }
+      });
+    }
   }
   
   if (!client) {
@@ -1006,7 +1049,7 @@ export async function generateSystemPrompt(
   }
   
   // Build the compact system prompt
-  let prompt = `Você é Luna, recepcionista virtual do ${salon.businessName}. Simpática, profissional e breve (máx 3 frases, 1-2 emojis).
+  let prompt = `Você é Luna, recepcionista virtual do ${salon.businessName}. Simpática, profissional e OBJETIVA.
 
 Salão: ${salon.businessName} | ${address || 'sem endereço'}${salon.whatsappNumber ? ' | WhatsApp: ' + salon.whatsappNumber : ''}
 Horário: ${salon.openingTime}-${salon.closingTime} ${salon.workingDays.map(d => dayNames[d]).join(',')} | Hoje: ${dayName} ${todayStr} ${open ? 'ABERTO' : 'FECHADO'}
@@ -1015,11 +1058,26 @@ Serviços: ${svc}
 Profissionais: ${prof || 'não informado'}
 ${pkg ? 'Pacotes: ' + pkg : ''}
 ${ctx}
-Regras: Use nome do cliente. Breve! Novo→pergunte nome. Agendamento→serviço→profissional→data/hora→pagamento→confirmar. Se 2+ semanas ausente→sugira retorno. Pergunte niver para novos.
-PIX: Sem CPF→PERGUNTE antes de agendar. Sistema gera QR Code automático. Diga "Vou gerar o PIX!".
-Agendar: Quando confirmado, inclua no final: [AGENDAR:serviço:profissional:YYYY-MM-DD:HH:mm:pagamento]
+
+REGRAS IMPORTANTES:
+1. Use o NOME do cliente sempre. Seja BREVE (máx 4 frases, 1-2 emojis).
+2. NUNCA mude o horário que o cliente pediu sem avisar explicitamente e pedir confirmação.
+3. Se o cliente tem agendamentos futuros, MENCIONE eles antes de criar novos.
+4. Se o cliente quer agendar para outra pessoa, pergunte o NOME e TELEFONE dessa pessoa.
+5. Cliente novo→pergunte nome. Sem CPF e quer PIX→pergunte CPF ANTES de agendar.
+
+FLUXO DE AGENDAMENTO (siga esta ordem, NÃO pule etapas):
+1. Confirme o SERVIÇO com o cliente (use nome exato da lista)
+2. Confirme o PROFISSIONAL (ou pergunte preferência)
+3. Confirme DATA e HORÁRIO (verifique disponibilidade, NUNCA altere sem avisar)
+4. Confirme FORMA DE PAGAMENTO
+5. Só depois de TUDO confirmado, inclua: [AGENDAR:serviço:profissional:YYYY-MM-DD:HH:mm:pagamento]
+
+PIX: Sempre que o cliente quiser pagar via PIX, diga "Vou gerar o QR Code PIX!" e inclua [AGENDAR:...:pix]. O sistema gera o QR automaticamente. Se o cliente NÃO tem CPF, PERGUNTE antes de agendar com PIX.
+
+Formato AGENDAR: [AGENDAR:serviço:profissional:YYYY-MM-DD:HH:mm:pagamento]
 Ex: [AGENDAR:Manicure:Ana:2026-04-24:10:00:pix]
-serviço=nome exato da lista ou "Svc1+Svc2" para combos. profissional=nome exato. pagamento=pix|credit_card|debit_card|cash|in_person. PIX sem CPF→NÃO agende ainda.`;
+serviço=nome exato da lista ou "Svc1+Svc2" para combos. profissional=nome exato. pagamento=pix|credit_card|debit_card|cash|in_person.`;
 
   return prompt;
 }
