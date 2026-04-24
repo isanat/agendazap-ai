@@ -287,6 +287,32 @@ export async function POST(request: NextRequest) {
       });
     }
 
+    // Record migrations in _prisma_migrations table so `prisma migrate deploy`
+    // won't try to re-apply them in future deployments
+    try {
+      console.log('[Ensure Schema] Recording migrations in _prisma_migrations table...');
+      for (const migration of MIGRATIONS) {
+        await db.$executeRawUnsafe(`
+          INSERT INTO "_prisma_migrations" ("id", "checksum", "finished_at", "migration_name", "logs", "rolled_back_at", "started_at", "applied_steps_count")
+          VALUES (
+            gen_random_uuid(),
+            'runtime-applied-${migration.name}',
+            NOW(),
+            '${migration.name}',
+            'Applied via ensure-schema runtime endpoint',
+            NULL,
+            NOW(),
+            1
+          )
+          ON CONFLICT ("migration_name") DO NOTHING
+        `);
+      }
+    } catch (recordError) {
+      // Non-critical - just log the error
+      const msg = recordError instanceof Error ? recordError.message : 'Unknown error';
+      console.warn('[Ensure Schema] Could not record migration in _prisma_migrations:', msg);
+    }
+
     // Verify the critical columns now exist
     console.log('[Ensure Schema] Verifying schema...');
     const verifyResult = await verifySchema();
