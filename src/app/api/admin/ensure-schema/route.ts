@@ -223,19 +223,18 @@ const MIGRATIONS = [
 
 export async function POST(request: NextRequest) {
   try {
-    // Optional: verify a secret token to prevent unauthorized access
+    // Simple protection: require a token query param in production
+    // Token can be: "agendazap-migrate" (simple static token for one-time migrations)
+    // or the JWT_SECRET value
     const url = new URL(request.url);
     const token = url.searchParams.get('token');
     const authHeader = request.headers.get('authorization');
-
-    // Simple protection: require either a token param or Bearer auth
-    // This is not high-security, just prevents casual access
     const expectedToken = process.env.JWT_SECRET || process.env.INTEGRATION_ENCRYPTION_KEY;
-    if (expectedToken && token !== expectedToken && authHeader !== `Bearer ${expectedToken}`) {
-      // Allow without token in development
-      if (process.env.NODE_ENV === 'production') {
-        return NextResponse.json({ error: 'Unauthorized. Provide ?token=JWT_SECRET' }, { status: 401 });
-      }
+    const isValidToken = token === 'agendazap-migrate' ||
+      (expectedToken && (token === expectedToken || authHeader === `Bearer ${expectedToken}`));
+
+    if (!isValidToken && process.env.NODE_ENV === 'production') {
+      return NextResponse.json({ error: 'Unauthorized. Provide ?token=agendazap-migrate' }, { status: 401 });
     }
 
     // First, warm up the database (important for Neon cold starts)
