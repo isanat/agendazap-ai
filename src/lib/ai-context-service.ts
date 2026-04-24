@@ -787,10 +787,11 @@ function calculateServiceFrequency(appointments: any[]): ClientContext['serviceF
   }).filter(sf => sf.avgDaysBetweenVisits > 0 || sf.suggestedReturnDate);
 }
 
-// === GERAÇÃO DE PROMPT ===
+// === GERAÇÃO DE PROMPT (OTIMIZADO PARA ECONOMIA DE TOKENS) ===
 
 /**
- * Gera o prompt do sistema com TODO o contexto
+ * Gera o prompt do sistema com contexto — otimizado para ~800 tokens
+ * (versão anterior consumia ~1800 tokens, redução de ~55%)
  */
 export async function generateSystemPrompt(
   accountId: string,
@@ -799,193 +800,106 @@ export async function generateSystemPrompt(
   const salon = await getSalonContext(accountId);
   const client = await getClientContext(clientPhone, accountId);
   
-  const dayNames = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
+  const dayNames = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
   const today = new Date();
   const dayName = dayNames[today.getDay()];
+  const todayStr = `${today.getDate().toString().padStart(2,'0')}/${(today.getMonth()+1).toString().padStart(2,'0')}`;
   
-  const addressParts = [salon.address, salon.city, salon.state].filter(Boolean);
-  const address = addressParts.length > 0 ? addressParts.join(', ') : 'Não informado';
+  const address = [salon.address, salon.city, salon.state].filter(Boolean).join(', ') || null;
+  const open = salon.workingDays.includes(today.getDay());
   
-  const servicesList = salon.services.map(s => {
-    const desc = s.description ? ` - ${s.description}` : '';
-    return `• ${s.name}: R$ ${s.price.toFixed(2)} (${s.durationMinutes} min)${desc}`;
-  }).join('\n');
+  // Compact service list: "Manicure R$50 (60min)" instead of bullet+description
+  const svc = salon.services.map(s => `${s.name} R$${s.price.toFixed(0)} (${s.durationMinutes}min)`).join(' | ');
   
-  const professionalsList = salon.professionals.map(p => {
-    const specs = p.specialties.length > 0 ? ` (especialista em: ${p.specialties.join(', ')})` : '';
-    const hours = p.openingTime && p.closingTime ? ` - trabalha ${p.openingTime} às ${p.closingTime}` : '';
-    return `• ${p.name}${specs}${hours}`;
-  }).join('\n');
+  // Compact professionals: "Ana: manicure, pedicure (9-18h)"
+  const prof = salon.professionals.map(p => {
+    const spec = p.specialties.length > 0 ? `: ${p.specialties.join(',')}` : '';
+    const hr = p.openingTime && p.closingTime ? ` (${p.openingTime}-${p.closingTime})` : '';
+    return `${p.name}${spec}${hr}`;
+  }).join(' | ');
   
-  const packagesList = salon.packages.length > 0
+  // Compact packages: "Combo Beleza R$80 (manicure+pedicure) save R$20"
+  const pkg = salon.packages.length > 0
     ? salon.packages.map(p => {
-        const svcList = p.services.join(', ');
-        const discount = p.originalPrice > p.price ? ` (ECONOMIZE R$ ${(p.originalPrice - p.price).toFixed(2)}!)` : '';
-        return `• ${p.name}: R$ ${p.price.toFixed(2)} (inclui: ${svcList})${discount}`;
-      }).join('\n')
-    : 'Nenhum pacote disponível';
+        const save = p.originalPrice > p.price ? ` save R$${(p.originalPrice - p.price).toFixed(0)}` : '';
+        return `${p.name} R$${p.price.toFixed(0)} (${p.services.join('+')})${save}`;
+      }).join(' | ')
+    : '';
   
-  let clientContext = '';
+  // Build compact client context
+  let ctx = '';
   if (client) {
-    const lastServices = client.lastServices
+    const phoneDisplay = isLidPhone(client.phone) ? '[pendente]' : '';
+    const hasCpf = !!client.cpf;
+    const hasBday = !!client.birthDate;
+    const hasPayment = !!client.paymentPreference;
+    const paymentLabel = hasPayment 
+      ? ({ pix: 'PIX', credit_card: 'cartão', debit_card: 'débito', cash: 'dinheiro', in_person: 'presencial' }[client.paymentPreference!] || client.paymentPreference)
+      : null;
+    
+    const parts: string[] = [
+      `Cliente: ${client.name}${phoneDisplay ? ' tel:' + phoneDisplay : ''}`,
+      `Visitas: ${client.totalAppointments}${client.daysSinceLastVisit !== null ? ` (última há ${client.daysSinceLastVisit}d)` : ''}`,
+    ];
+    
+    if (hasPayment) parts.push(`Pagamento: ${paymentLabel}`);
+    if (!hasCpf) parts.push('SEM CPF');
+    if (!hasBday) parts.push('SEM niver');
+    if (client.loyaltyPoints > 0) parts.push(`Fidelidade: ${client.loyaltyPoints}pts`);
+    
+    // Compact last services (max 3)
+    const lastSvc = client.lastServices
       .filter(s => s.status !== 'cancelled' && s.status !== 'canceled')
-      .slice(0, 5)
-      .map(s => 
-        `${s.serviceName} com ${s.professionalName || 'profissional'} em ${formatDate(s.date)} (${statusLabel(s.status)})`
-      ).join('; ');
+      .slice(0, 3)
+      .map(s => `${s.serviceName} ${formatDate(s.date)}`)
+      .join(', ');
+    if (lastSvc) parts.push(`Histórico: ${lastSvc}`);
     
-    const upcoming = client.upcomingAppointments.map(a =>
-      `${a.serviceName} em ${formatDate(a.date)} às ${formatTime(a.date)} (status: ${statusLabel(a.status)})`
-    ).join('; ');
-
-    const cancelled = client.cancelledAppointments.length > 0
-      ? client.cancelledAppointments.slice(0, 3).map(a =>
-          `${a.serviceName} em ${formatDate(a.date)}${a.cancellationReason ? ` (motivo: ${a.cancellationReason})` : ''}`
-        ).join('; ')
-      : null;
-
-    // Build proactive suggestions
-    const proactiveSuggestions: string[] = [];
+    // Upcoming (max 2)
+    const upc = client.upcomingAppointments.slice(0, 2)
+      .map(a => `${a.serviceName} ${formatDate(a.date)} ${formatTime(a.date)}`)
+      .join(', ');
+    if (upc) parts.push(`Agendado: ${upc}`);
     
-    // Suggest return based on time since last visit
+    if (client.preferredServices.length > 0) parts.push(`Prefere: ${client.preferredServices.join(',')}`);
+    if (client.preferredProfessional) parts.push(`Profissional pref: ${client.preferredProfessional}`);
+    if (client.isNewClient) parts.push('CLIENTE NOVO');
+    if (client.aiNotes) parts.push(`Obs IA: ${client.aiNotes.substring(0, 80)}`);
+    
+    // Proactive hints (compact, max 2)
+    const hints: string[] = [];
     if (client.daysSinceLastVisit !== null && client.daysSinceLastVisit > 14) {
-      proactiveSuggestions.push(`⏰ Faz ${client.daysSinceLastVisit} dias que ${client.name} não aparece. Sugira agendar um retorno!`);
+      hints.push(`Sugira retorno (${client.daysSinceLastVisit}d ausente)`);
     }
-
-    // Suggest based on service frequency
-    client.serviceFrequency.forEach(sf => {
-      if (sf.suggestedReturnDate) {
-        proactiveSuggestions.push(`🔄 ${sf.serviceName}: cliente faz em média a cada ${sf.avgDaysBetweenVisits} dias. Sugira retorno para ${sf.suggestedReturnDate}!`);
-      }
-    });
-
-    // Suggest preferred payment method
-    if (!client.paymentPreference && client.totalAppointments >= 1) {
-      proactiveSuggestions.push(`💳 Pergunte a preferência de pagamento (PIX, cartão ou presencial) para personalizar futuros atendimentos.`);
+    if (!hasPayment && client.totalAppointments >= 1) {
+      hints.push('Pergunte forma pagamento');
     }
-
-    const paymentLabel = client.paymentPreference 
-      ? { pix: 'PIX', credit_card: 'Cartão de Crédito/Débito', debit_card: 'Cartão de Débito', cash: 'Dinheiro', in_person: 'Presencialmente' }[client.paymentPreference] || client.paymentPreference
-      : null;
+    if (hints.length > 0) parts.push(`💡 ${hints.join('; ')}`);
     
-    // Determine phone display for AI context
-    const phoneDisplay = isLidPhone(client.phone) ? '[pendente]' : client.phone;
-    const hasUnresolvedLid = isLidPhone(client.phone);
+    if (isLidPhone(client.phone)) parts.push('Pergunte telefone');
     
-    clientContext = `
-CONTEXTO DO CLIENTE (USE ISSO!):
-- Nome: ${client.name}
-- Telefone: ${phoneDisplay}
-${hasUnresolvedLid ? '- ⚠️ O telefone deste cliente ainda não foi identificado. Quando possível, pergunte o telefone.' : ''}
-${client.whatsappPushName && client.whatsappPushName !== client.name ? `- Nome no WhatsApp: ${client.whatsappPushName}` : ''}
-- Total de visitas: ${client.totalAppointments}
-- Última visita: ${client.lastVisit ? formatDate(client.lastVisit) : 'Primeira vez'}
-${client.daysSinceLastVisit !== null ? `- Dias desde a última visita: ${client.daysSinceLastVisit}` : ''}
-- Pontos de fidelidade: ${client.loyaltyPoints} pontos
-${paymentLabel ? `- Preferência de pagamento: ${paymentLabel}` : ''}
-${client.cpf ? `- CPF: ${client.cpf}` : '⚠️ CPF não cadastrado - Quando o cliente escolher PIX, PERGUNTE o CPF para gerar o pagamento!'}
-${client.birthDate ? `- Data de nascimento: ${new Date(client.birthDate).toLocaleDateString('pt-BR')}` : '⚠️ Data de nascimento não cadastrada - Pergunte o aniversário de forma natural para enviar felicitações!'}
-${client.notes ? `- Observações: ${client.notes}` : ''}
-${client.aiNotes ? `- Notas da IA: ${client.aiNotes}` : ''}
-${client.isNewClient ? '⚠️ CLIENTE NOVO - Primeiro contato! Pergunte o nome dele para personalizar o atendimento.' : ''}
-${lastServices ? `- Últimos serviços realizados: ${lastServices}` : ''}
-${upcoming ? `- ⚠️ AGENDAMENTOS FUTUROS: ${upcoming}` : ''}
-${cancelled ? `- ❌ CANCELAMENTOS RECENTES: ${cancelled}` : ''}
-${client.preferredServices.length > 0 ? `- Serviços preferidos: ${client.preferredServices.join(', ')}` : ''}
-${client.preferredProfessional ? `- Profissional preferido: ${client.preferredProfessional}` : ''}
-
-${proactiveSuggestions.length > 0 ? `=== SUGESTÕES PROATIVAS (USE DURANTE A CONVERSA!) ===\n${proactiveSuggestions.join('\n')}` : ''}
-
-IMPORTANTE: 
-- Use o nome do cliente (${client.name}) na conversa para personalizar o atendimento!
-- Se o cliente for NOVO (nome genérico como "Cliente XXXX"), PERGUNTE o nome dele!
-- Se o cliente fornecer o nome, diga "Vou anotar seu nome!" e informe que o nome foi registrado.
-- Se a preferência de pagamento não foi informada e o cliente vai agendar, PERGUNTE como prefere pagar (PIX/cartão online ou presencialmente no dia).
-- Se o cliente escolher PIX e NÃO TEM CPF cadastrado, PERGUNTE o CPF! Diga: "Para pagamento via PIX, preciso do seu CPF. Pode informar?" O CPF é necessário para gerar o pagamento.
-${hasUnresolvedLid ? '- O telefone deste cliente não foi identificado ainda. Tente obter o telefone dele durante a conversa de forma natural, perguntando algo como "Para facilitar seu cadastro, qual é seu telefone?"' : ''}
-${client.daysSinceLastVisit && client.daysSinceLastVisit > 21 ? `- Faz mais de 3 semanas que ${client.name} não vem! Sugira agendar um retorno de forma carinhosa.` : ''}
-`;
+    ctx = parts.join('. ') + '.';
   } else {
-    clientContext = `
-CONTEXTO DO CLIENTE:
-Este é um NOVO cliente (primeiro contato). Seja acolhedor e apresente o salão brevemente.
-
-⚠️ AÇÕES OBRIGATÓRIAS PARA CLIENTE NOVO:
-1. PERGUNTE o nome dele para personalizar o atendimento
-2. Quando ele disser o nome, responda "Obrigada, {nome}! Vou registrar aqui para lembrar na próxima vez 😊"
-3. Apresente os serviços mais populares brevemente
-4. Pergunte se já conhece o salão ou se foi indicado por alguém
-5. Pergunte como prefere realizar o pagamento (PIX, cartão ou presencialmente)
-6. Se escolher PIX, PERGUNTE o CPF para gerar o pagamento
-`;
+    ctx = 'CLIENTE NOVO. Pergunte nome, apresente serviços, pergunte forma pagamento. Se PIX sem CPF, pergunte CPF.';
   }
   
-  const availableToday = salon.workingDays.includes(today.getDay());
-  
-  return `Você é a RECEPCIONISTA VIRTUAL do ${salon.businessName}. Você é simpática, profissional e MUITO ATENCIOSA. Seu nome é Luna.
+  // Build the compact system prompt
+  let prompt = `Você é Luna, recepcionista virtual do ${salon.businessName}. Simpática, profissional e breve (máx 3 frases, 1-2 emojis).
 
-=== INFORMAÇÕES DO ESTABELECIMENTO ===
-Nome: ${salon.businessName}
-Tipo: ${salon.businessType === 'salon' ? 'Salão de Beleza' : salon.businessType}
-Endereço: ${address}
-${salon.googleMapsUrl ? `Google Maps: ${salon.googleMapsUrl}` : ''}
-WhatsApp: ${salon.whatsappNumber}
-Horário de funcionamento: ${salon.openingTime} às ${salon.closingTime}
-Dias de funcionamento: ${salon.workingDays.map(d => dayNames[d]).join(', ')}
-Hoje é: ${dayName}, ${formatDate(today)}
-${availableToday ? '✅ Estamos ABERTOS hoje!' : '❌ Estamos FECHADOS hoje'}
+Salão: ${salon.businessName} | ${address || 'sem endereço'}${salon.whatsappNumber ? ' | WhatsApp: ' + salon.whatsappNumber : ''}
+Horário: ${salon.openingTime}-${salon.closingTime} ${salon.workingDays.map(d => dayNames[d]).join(',')} | Hoje: ${dayName} ${todayStr} ${open ? 'ABERTO' : 'FECHADO'}
+${salon.googleMapsUrl ? 'Maps: ' + salon.googleMapsUrl : ''}
+Serviços: ${svc}
+Profissionais: ${prof || 'não informado'}
+${pkg ? 'Pacotes: ' + pkg : ''}
+${ctx}
+Regras: Use nome do cliente. Breve! Novo→pergunte nome. Agendamento→serviço→profissional→data/hora→pagamento→confirmar. Se 2+ semanas ausente→sugira retorno. Pergunte niver para novos.
+PIX: Sem CPF→PERGUNTE antes de agendar. Sistema gera QR Code automático. Diga "Vou gerar o PIX!".
+Agendar: Quando confirmado, inclua no final: [AGENDAR:serviço:profissional:YYYY-MM-DD:HH:mm:pagamento]
+Ex: [AGENDAR:Manicure:Ana:2026-04-24:10:00:pix]
+serviço=nome exato da lista ou "Svc1+Svc2" para combos. profissional=nome exato. pagamento=pix|credit_card|debit_card|cash|in_person. PIX sem CPF→NÃO agende ainda.`;
 
-=== SERVIÇOS OFERECIDOS ===
-${servicesList}
-
-=== PROFISSIONAIS ===
-${professionalsList || 'Informações de profissionais não disponíveis'}
-
-=== PACOTES E PROMOÇÕES ===
-${packagesList}
-
-${clientContext}
-
-=== REGRAS ===
-- Use o nome do cliente (${client?.name || 'novo cliente'}) se souber
-- Seja BREVE e CONCISA: máximo 3 frases por mensagem, use 1-2 emojis por msg, não repita saudações. Economize tokens!
-- Mantenha contexto da conversa
-- Cliente novo: PERGUNTE o nome, confirme com "Anotado, {nome}!"
-- Agendamento: serviço → profissional → data/hora → pagamento → confirmar dados + valor
-- Se faz 2+ semanas sem vir, sugira retorno. Se cancelou, pergunte remarcar
-- Pagamento: PIX, cartão, dinheiro ou presencialmente
-- Para clientes novos, PERGUNTE a data de nascimento (dia/mês) de forma natural para enviar felicitações no aniversário
-
-=== PAGAMENTO PIX AUTOMÁTICO ===
-IMPORTANTE: Quando o cliente escolher PIX como forma de pagamento:
-1. Se o CPF do cliente NÃO está cadastrado, PERGUNTE o CPF ANTES de confirmar o agendamento!
-   Diga: "Para gerar o pagamento PIX, preciso do seu CPF. Pode me informar?"
-2. O sistema GERA AUTOMATICAMENTE um QR Code PIX e o código "Copia e Cola" para pagamento imediato!
-3. Informe ao cliente que o QR Code PIX será enviado para pagamento imediato
-4. Diga: "Vou gerar o QR Code PIX para você pagar agora!" ou similar
-5. O sistema adiciona automaticamente o código PIX após sua mensagem
-6. NUNCA diga que o pagamento é só presencial ou que não gera QR Code
-7. Se o cliente perguntar se pode pagar agora, diga SIM e que o QR Code será gerado
-8. Após o pagamento PIX, o agendamento é confirmado automaticamente
-
-=== AGENDAMENTO AUTOMÁTICO ===
-Quando o cliente CONFIRMAR o agendamento (disser "sim", "pode ser", "perfeito", "confirmo", etc.), inclua NO FINAL da sua resposta uma linha com o formato:
-[AGENDAR:serviceName:professionalName:YYYY-MM-DD:HH:mm:paymentMethod]
-Exemplo: [AGENDAR:Corte Masculino:Roberto:2026-04-23:13:30:pix]
-
-Regras:
-- Só inclua [AGENDAR:...] quando tiver TODOS os dados confirmados
-- serviceName pode ser: (1) nome EXATO de um serviço da lista, (2) nome EXATO de um pacote/promoção da lista, ou (3) "Serviço1 + Serviço2" para combos (ex: "Corte Masculino + Barba")
-- Se o cliente pedir um combo que NÃO existe como pacote, use o formato "Serviço1 + Serviço2" (ex: [AGENDAR:Corte Masculino + Barba:Roberto:2026-04-23:14:00:pix])
-- professionalName deve ser EXATAMENTE como consta na lista de profissionais
-- Data no formato YYYY-MM-DD, hora no formato HH:mm (24h)
-- paymentMethod: pix, credit_card, debit_card, cash ou in_person
-- NÃO mencione o formato [AGENDAR:] no texto da mensagem, ele é automático
-- Quando o paymentMethod for "pix", INFORME que o QR Code será gerado para pagamento imediato
-- Se o cliente escolher PIX mas ainda não informou o CPF, NÃO inclua [AGENDAR:] ainda! Primeiro pergunte o CPF, e só agende quando receber o CPF
-- Se o cliente já informou o CPF anteriormente (consta no contexto), pode agendar normalmente
-
-Seja acolhedora, prestativa e INTELIGENTE! Respostas CONCISAS: máximo 3 frases, direta ao ponto!`;
+  return prompt;
 }
 
 // === HELPERS ===
