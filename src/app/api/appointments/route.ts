@@ -1,6 +1,7 @@
 import { db } from '@/lib/db'
 import { NextRequest, NextResponse } from 'next/server'
 import { getAuthUser } from '@/lib/auth-helpers'
+import { getSalonTimezone, getNowInSalonTz, createDateInSalonTz } from '@/lib/booking-validation'
 
 /**
  * Verify that the request is authorized to access appointment operations.
@@ -192,14 +193,15 @@ export async function GET(request: NextRequest) {
     const where: any = { accountId }
     
     if (date) {
-      const startDate = new Date(date)
-      startDate.setHours(0, 0, 0, 0)
-      const endDate = new Date(date)
-      endDate.setHours(23, 59, 59, 999)
-      
+      // Use salon's timezone for date boundaries instead of server timezone
+      // This ensures "today's appointments" are correct regardless of server location
+      const salonTimezone = await getSalonTimezone(accountId)
+      const startOfDay = createDateInSalonTz(date, '00:00', salonTimezone)
+      const endOfDay = createDateInSalonTz(date, '23:59', salonTimezone)
+
       where.datetime = {
-        gte: startDate,
-        lte: endDate
+        gte: startOfDay,
+        lte: endOfDay
       }
     }
 
@@ -313,8 +315,20 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Client not found' }, { status: 400 })
     }
 
-    // Calculate end time
-    const startTime = new Date(datetime)
+    // Calculate start/end time using salon's timezone
+    // The client should send 'date' (YYYY-MM-DD) and 'time' (HH:mm) separately for timezone safety
+    // But we also support raw 'datetime' for backward compatibility
+    let startTime: Date
+
+    if (body.date && body.time) {
+      // Preferred: separate date + time with salon timezone conversion
+      const salonTimezone = await getSalonTimezone(accountId)
+      startTime = createDateInSalonTz(body.date, body.time, salonTimezone)
+    } else {
+      // Fallback: use the raw datetime (may have timezone issues)
+      startTime = new Date(datetime)
+    }
+
     const endTime = new Date(startTime.getTime() + service.durationMinutes * 60000)
 
     // Check for blocked slots before creating appointment

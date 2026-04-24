@@ -17,19 +17,24 @@ import { randomBytes } from 'crypto';
 const ACCESS_TOKEN_EXPIRY = '15m'; // 15 minutes
 const REFRESH_TOKEN_EXPIRY_DAYS = 7; // 7 days
 // JWT secret - MUST be set via environment variable in production
+// Lazy initialization to avoid module-level crashes on Vercel cold starts
+let _jwtSecret: Uint8Array | null = null;
+
 function getJwtSecret(): Uint8Array {
+  if (_jwtSecret) return _jwtSecret;
+
   const secret = process.env.JWT_SECRET || process.env.INTEGRATION_ENCRYPTION_KEY;
   if (!secret) {
     if (process.env.NODE_ENV === 'production') {
       throw new Error('FATAL: JWT_SECRET or INTEGRATION_ENCRYPTION_KEY environment variable must be set in production');
     }
     console.warn('[JWT] WARNING: Using default secret key. Set JWT_SECRET environment variable for production!');
-    return new TextEncoder().encode('agendazap-dev-secret-key-not-for-production-32c!');
+    _jwtSecret = new TextEncoder().encode('agendazap-dev-secret-key-not-for-production-32c!');
+    return _jwtSecret;
   }
-  return new TextEncoder().encode(secret);
+  _jwtSecret = new TextEncoder().encode(secret);
+  return _jwtSecret;
 }
-
-const JWT_SECRET = getJwtSecret();
 
 export interface TokenPayload {
   userId: string;
@@ -61,7 +66,7 @@ export async function generateAccessToken(payload: TokenPayload): Promise<string
     .setExpirationTime(ACCESS_TOKEN_EXPIRY)
     .setIssuer('agendazap-ai')
     .setSubject(payload.userId)
-    .sign(JWT_SECRET);
+    .sign(getJwtSecret());
 
   return token;
 }
@@ -71,7 +76,7 @@ export async function generateAccessToken(payload: TokenPayload): Promise<string
  */
 export async function verifyAccessToken(token: string): Promise<TokenPayload | null> {
   try {
-    const { payload } = await jwtVerify(token, JWT_SECRET, {
+    const { payload } = await jwtVerify(token, getJwtSecret(), {
       issuer: 'agendazap-ai',
     });
 

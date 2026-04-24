@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
+import { getSalonTimezone, getNowInSalonTz, createDateInSalonTz } from '@/lib/booking-validation'
 
 // GET - Get real dashboard statistics for an account
 export async function GET(request: NextRequest) {
@@ -11,14 +12,28 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'accountId é obrigatório' }, { status: 400 })
     }
 
-    // Get current date info
-    const now = new Date()
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-    const startOfWeek = new Date(today)
-    startOfWeek.setDate(today.getDate() - today.getDay()) // Sunday
-    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1)
-    const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1)
-    const endOfLastMonth = new Date(now.getFullYear(), now.getMonth(), 0)
+    // Get salon timezone for correct date boundaries
+    const salonTimezone = await getSalonTimezone(accountId)
+    const salonNow = getNowInSalonTz(salonTimezone)
+
+    // Use salon timezone for all date calculations
+    const now = salonNow.now
+    const today = createDateInSalonTz(salonNow.isoDate, '00:00', salonTimezone)
+    const tomorrowStart = new Date(today.getTime() + 24 * 60 * 60 * 1000)
+
+    // Calculate week start (Sunday) in salon timezone
+    const salonDayOfWeek = salonNow.dayOfWeek // 0=Sun
+    const weekStartIso = new Date(salonNow.now.getTime() - salonDayOfWeek * 24 * 60 * 60 * 1000)
+    const startOfWeek = createDateInSalonTz(weekStartIso.toISOString().substring(0, 10), '00:00', salonTimezone)
+
+    // Month boundaries in salon timezone
+    const year = parseInt(salonNow.isoDate.substring(0, 4))
+    const month = parseInt(salonNow.isoDate.substring(5, 7)) - 1
+    const startOfMonth = createDateInSalonTz(`${year}-${String(month + 1).padStart(2, '0')}-01`, '00:00', salonTimezone)
+    const startOfLastMonth = month === 0
+      ? createDateInSalonTz(`${year - 1}-12-01`, '00:00', salonTimezone)
+      : createDateInSalonTz(`${year}-${String(month).padStart(2, '0')}-01`, '00:00', salonTimezone)
+    const endOfLastMonth = new Date(startOfMonth.getTime() - 1)
 
     // Today's appointments
     const todayAppointments = await db.appointment.count({

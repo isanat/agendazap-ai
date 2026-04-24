@@ -411,6 +411,7 @@ export function AuthPage({ onLogin }: AuthPageProps) {
                           id="login-email"
                           type="email"
                           placeholder="seu@email.com"
+                          autoComplete="email"
                           className="pl-10 h-11 ring-1 ring-border/50 focus:ring-2 focus:ring-green-500/50 focus:border-green-500 transition-all duration-300"
                           value={loginData.email}
                           onChange={(e) => setLoginData({ ...loginData, email: e.target.value })}

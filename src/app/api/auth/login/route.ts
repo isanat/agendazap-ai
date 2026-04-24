@@ -118,10 +118,26 @@ export async function POST(request: NextRequest) {
     return response;
   } catch (error) {
     console.error('Login error:', error);
+
+    // Provide specific diagnostics for common configuration issues
+    const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+    let diagnosticHint = '';
+
+    if (errorMsg.includes('DATABASE_URL')) {
+      diagnosticHint = 'Database not configured. Check DATABASE_URL environment variable.';
+    } else if (errorMsg.includes('JWT_SECRET') || errorMsg.includes('INTEGRATION_ENCRYPTION_KEY')) {
+      diagnosticHint = 'JWT secret not configured. Check JWT_SECRET environment variable.';
+    } else if (errorMsg.includes('connect') || errorMsg.includes('ECONNREFUSED') || errorMsg.includes('timeout')) {
+      diagnosticHint = 'Database connection failed. The database may be paused or unreachable.';
+    } else if (errorMsg.includes('P1001') || errorMsg.includes('Can\'t reach database server')) {
+      diagnosticHint = 'Database server unreachable. Check if Neon database is active.';
+    }
+
     return NextResponse.json(
       {
         error: 'Erro interno do servidor',
-        details: error instanceof Error ? error.message : 'Unknown error'
+        details: process.env.NODE_ENV === 'development' ? errorMsg : undefined,
+        hint: diagnosticHint || undefined,
       },
       { status: 500 }
     );

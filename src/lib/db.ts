@@ -7,51 +7,209 @@ import { resolve } from 'path'
 if (process.env.NODE_ENV !== 'production' || !process.env.VERCEL) {
   const envPath = resolve(process.cwd(), '.env')
   const envConfig = config({ path: envPath, override: true })
-  
+
   if (envConfig.error && process.env.NODE_ENV !== 'production') {
-    console.error('[db.ts] Warning: Could not load .env file:', envConfig.error.message)
+    // No .env file is fine - env vars may be set by the platform
   }
-}
-
-// Get DATABASE_URL from environment (set by Vercel or .env file)
-const databaseUrl = process.env.DATABASE_URL
-
-// Validate that we have a PostgreSQL URL
-if (!databaseUrl) {
-  throw new Error('DATABASE_URL environment variable is required. Please set it in .env file or Vercel environment variables.')
-}
-
-if (!databaseUrl.startsWith('postgresql://') && !databaseUrl.startsWith('postgres://')) {
-  console.error('[db.ts] Invalid DATABASE_URL format. Expected PostgreSQL URL, got:', databaseUrl.substring(0, 50) + '...')
-  throw new Error(
-    'DATABASE_URL must be a PostgreSQL connection string (starting with postgresql:// or postgres://). ' +
-    'Current value appears to be a SQLite path. Please check your environment configuration.'
-  )
 }
 
 const globalForPrisma = globalThis as unknown as {
   prisma: PrismaClient | undefined
+  _dbInitError: string | null
+  _dbWarmingUp: boolean
 }
 
-// Always create a new PrismaClient to pick up schema changes
-// In development, the global cache can become stale after prisma generate
-if (process.env.NODE_ENV !== 'production' && globalForPrisma.prisma) {
-  try {
-    // Test if the cached client has the latest models
-    if (!(globalForPrisma.prisma as any).lidMapping) {
-      console.log('[db.ts] Cached PrismaClient missing models, creating fresh instance')
+// Check if we have a valid database URL
+function getDatabaseUrl(): string {
+  const databaseUrl = process.env.DATABASE_URL
+
+  if (!databaseUrl) {
+    const msg = 'DATABASE_URL environment variable is required. Please set it in .env file or Vercel environment variables.'
+    console.error('[db.ts] ERROR:', msg)
+    globalForPrisma._dbInitError = msg
+    throw new Error(msg)
+  }
+
+  if (!databaseUrl.startsWith('postgresql://') && !databaseUrl.startsWith('postgres://')) {
+    const msg = `DATABASE_URL must be a PostgreSQL connection string (starting with postgresql:// or postgres://). Got: ${databaseUrl.substring(0, 30)}...`
+    console.error('[db.ts] ERROR:', msg)
+    globalForPrisma._dbInitError = msg
+    throw new Error(msg)
+  }
+
+  globalForPrisma._dbInitError = null
+  return databaseUrl
+}
+
+// Create PrismaClient with lazy initialization
+function createPrismaClient(): PrismaClient {
+  const databaseUrl = getDatabaseUrl()
+
+  // In development, check if cached client has the latest models
+  if (process.env.NODE_ENV !== 'production' && globalForPrisma.prisma) {
+    try {
+      if (!(globalForPrisma.prisma as any).lidMapping) {
+        console.log('[db.ts] Cached PrismaClient missing models, creating fresh instance')
+        globalForPrisma.prisma = undefined
+      }
+    } catch {
       globalForPrisma.prisma = undefined
     }
-  } catch {
-    globalForPrisma.prisma = undefined
+  }
+
+  const client =
+    globalForPrisma.prisma ??
+    new PrismaClient({
+      datasourceUrl: databaseUrl,
+      log: process.env.NODE_ENV === 'development' ? ['query', 'error', 'warn'] : ['error'],
+    })
+
+  if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = client
+
+  return client
+}
+
+// Lazy initialization with Proxy to avoid module-level crashes
+let _db: PrismaClient | null = null
+
+export const db = new Proxy({} as PrismaClient, {
+  get(_target, prop, receiver) {
+    if (!_db) {
+      try {
+        _db = createPrismaClient()
+      } catch (error) {
+        console.error('[db.ts] Failed to initialize PrismaClient:', error instanceof Error ? error.message : error)
+        throw error
+      }
+    }
+    return Reflect.get(_db, prop, receiver)
+  },
+})
+
+/**
+ * Warm up the Neon database connection.
+ * Neon databases pause after inactivity and need a "wake up" query.
+ * This function retries the connection with exponential backoff.
+ */
+export async function warmUpDatabase(maxRetries = 3): Promise<{ ok: boolean; error?: string; latencyMs?: number }> {
+  if (globalForPrisma._dbWarmingUp) {
+    return { ok: true, latencyMs: 0 }
+  }
+
+  globalForPrisma._dbWarmingUp = true
+
+  try {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        if (!_db) {
+          _db = createPrismaClient()
+        }
+
+        const start = Date.now()
+        await _db.$queryRaw`SELECT 1`
+        const latencyMs = Date.now() - start
+
+        console.log(`[db.ts] Database warm-up successful (attempt ${attempt}, ${latencyMs}ms)`)
+        return { ok: true, latencyMs }
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : 'Unknown error'
+        console.warn(`[db.ts] Database warm-up attempt ${attempt}/${maxRetries} failed:`, errorMsg)
+
+        if (attempt < maxRetries) {
+          // Exponential backoff: 1s, 2s, 4s...
+          const delayMs = Math.pow(2, attempt - 1) * 1000
+          await new Promise(resolve => setTimeout(resolve, delayMs))
+
+          // Reset the client for retry
+          try {
+            await _db?.$disconnect()
+          } catch { /* ignore */ }
+          _db = null
+          globalForPrisma.prisma = undefined
+        } else {
+          return { ok: false, error: errorMsg }
+        }
+      }
+    }
+
+    return { ok: false, error: 'Max retries exceeded' }
+  } finally {
+    globalForPrisma._dbWarmingUp = false
   }
 }
 
-export const db =
-  globalForPrisma.prisma ??
-  new PrismaClient({
-    datasourceUrl: databaseUrl,
-    log: process.env.NODE_ENV === 'development' ? ['query', 'error', 'warn'] : ['error'],
-  })
+/**
+ * Check if the database is properly configured and accessible.
+ * Returns { ok: boolean, error?: string } with diagnostic info.
+ * Also attempts to warm up Neon if the connection is cold.
+ */
+export async function checkDatabaseHealth(): Promise<{ ok: boolean; error?: string; latencyMs?: number; details?: string }> {
+  try {
+    const databaseUrl = process.env.DATABASE_URL
 
-if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = db
+    if (!databaseUrl) {
+      return { ok: false, error: 'DATABASE_URL environment variable is not set' }
+    }
+
+    if (!databaseUrl.startsWith('postgresql://') && !databaseUrl.startsWith('postgres://')) {
+      return { ok: false, error: `DATABASE_URL is not a PostgreSQL URL (starts with: ${databaseUrl.substring(0, 15)})` }
+    }
+
+    // Try the health check with Neon warm-up
+    const warmUpResult = await warmUpDatabase(2)
+
+    if (warmUpResult.ok) {
+      return { ok: true, latencyMs: warmUpResult.latencyMs }
+    }
+
+    return { ok: false, error: warmUpResult.error }
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : 'Unknown database error',
+    }
+  }
+}
+
+/**
+ * Verify that the database schema has all required tables/columns.
+ * Specifically checks for the timezone field on Account.
+ */
+export async function verifyDatabaseSchema(): Promise<{
+  ok: boolean;
+  missingColumns?: string[];
+  timezoneFieldExists?: boolean;
+  error?: string;
+}> {
+  try {
+    if (!_db) {
+      _db = createPrismaClient()
+    }
+
+    // Check if the Account table has the timezone column
+    const result = await _db.$queryRaw<Array<{ column_name: string }>>`
+      SELECT column_name
+      FROM information_schema.columns
+      WHERE table_name = 'Account'
+      AND column_name = 'timezone'
+    `
+
+    const timezoneFieldExists = result.length > 0
+
+    const missingColumns: string[] = []
+    if (!timezoneFieldExists) {
+      missingColumns.push('Account.timezone')
+    }
+
+    return {
+      ok: missingColumns.length === 0,
+      missingColumns: missingColumns.length > 0 ? missingColumns : undefined,
+      timezoneFieldExists,
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : 'Schema verification failed',
+    }
+  }
+}
