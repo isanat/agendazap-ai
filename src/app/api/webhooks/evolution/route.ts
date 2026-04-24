@@ -296,7 +296,7 @@ async function checkContactExists(
 /**
  * Send a WhatsApp message via Evolution API
  */
-async function sendWhatsAppMessage(
+export async function sendWhatsAppMessage(
   accountId: string,
   phone: string,
   message: string

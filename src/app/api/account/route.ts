@@ -48,6 +48,7 @@ export async function PUT(request: NextRequest) {
         openingTime: data.openingTime,
         closingTime: data.closingTime,
         workingDays: data.workingDays,
+        timezone: data.timezone,
         noShowFeeEnabled: data.noShowFeeEnabled,
         noShowFeeAmount: data.noShowFeeAmount,
         noShowFeeDeadline: data.noShowFeeDeadline,
