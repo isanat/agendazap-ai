@@ -1086,6 +1086,8 @@ serviço=nome exato da lista ou "Svc1+Svc2" para combos. profissional=nome exato
 
 // === HELPERS ===
 
+const dayNames = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+
 function parseWorkingDays(workingDays: string | null): number[] {
   if (!workingDays) return [1, 2, 3, 4, 5];
   return workingDays.split(',').map(d => parseInt(d.trim())).filter(d => !isNaN(d));
