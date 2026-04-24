@@ -707,55 +707,121 @@ async function processIncomingMessage(
     }
   }
   
+  // Try additional fields that may contain real phone numbers for LID contacts
+  // WhatsApp/ Evolution API sometimes includes these in the webhook payload
+  if (phone && isLidIdentifier(phone)) {
+    // Check for 'lid' field mapping (some Evolution API versions)
+    const lidFieldValue = data.lid || data.lidJid;
+    if (lidFieldValue && typeof lidFieldValue === 'string') {
+      const lidDigits = lidFieldValue.replace(/\D/g, '');
+      if (isValidPhoneNumber(lidDigits)) {
+        console.log(`[Webhook] Phone extracted from lid field: ${lidDigits}`);
+        phone = lidDigits;
+      }
+    }
+    
+    // Check for 'verifiedName' or other contact fields that might have the phone
+    const additionalFields = ['verifiedName', 'vname', 'profileId', 'realJid', 'deviceJid'];
+    for (const field of additionalFields) {
+      const fieldValue = data[field] || data.key?.[field];
+      if (fieldValue && typeof fieldValue === 'string') {
+        const fieldDigits = fieldValue.replace(/\D/g, '');
+        // For JID-like fields, extract the phone part
+        if (fieldValue.includes('@s.whatsapp.net')) {
+          const phoneFromJid = fieldValue.split('@')[0];
+          if (isValidPhoneNumber(phoneFromJid)) {
+            console.log(`[Webhook] Phone extracted from ${field} field: ${phoneFromJid}`);
+            phone = phoneFromJid;
+            break;
+          }
+        }
+        // For phone-like digits
+        if (fieldDigits.length >= 10 && fieldDigits.length <= 13 && isValidPhoneNumber(fieldDigits)) {
+          console.log(`[Webhook] Phone extracted from ${field} field: ${fieldDigits}`);
+          phone = fieldDigits;
+          break;
+        }
+      }
+    }
+    
+    // Log full webhook data for LID contacts (truncated) for debugging
+    // This helps discover new fields that Evolution API might add in future versions
+    if (isLidIdentifier(phone)) {
+      const dataKeys = Object.keys(data).filter(k => k !== 'message'); // Exclude message content
+      const dataSample = dataKeys.map(k => {
+        const val = data[k];
+        if (typeof val === 'string') return `${k}="${val.substring(0, 50)}"`;
+        if (typeof val === 'object' && val !== null) return `${k}={${Object.keys(val).join(',')}}`;
+        return `${k}=${String(val).substring(0, 30)}`;
+      }).join(', ');
+      console.log(`[Webhook] 🔍 LID unresolved - full data keys: ${dataSample}`);
+    }
+  }
+  
   // If we got a LID identifier, try to resolve it to a real phone number
   if (phone && isLidIdentifier(phone)) {
     console.log(`[Webhook] LID detected, attempting phone resolution for: ${phone}`);
+    const lidValue = phone.replace('lid:', '');
+    const lidAccountId = await findAccountByInstance(instanceName);
     
     try {
-      // Method 1: Try Evolution API resolution (most reliable)
-      const resolvedPhone = await resolveLidToPhone(instanceName, phone);
-      if (resolvedPhone && isValidPhoneNumber(resolvedPhone)) {
-        phone = resolvedPhone;
-        console.log(`[Webhook] LID resolved via Evolution API to: ${phone}`);
-      } else {
-        // Method 2: Look for previous messages from this SAME LID in the database
-        // that were associated with a real phone number (NOT frequency-based across all contacts)
-        const lidAccountId = await findAccountByInstance(instanceName);
-        const lidValue = phone.replace('lid:', '');
+      // Method 0: Check if we already have a Client with this whatsappLid that has a real phone
+      // This is the fastest resolution - no API call needed
+      if (lidAccountId) {
+        const existingClient = await db.client.findFirst({
+          where: {
+            accountId: lidAccountId,
+            whatsappLid: lidValue,
+            phone: { not: { startsWith: 'lid:' } },
+          },
+          select: { phone: true, name: true }
+        });
         
-        if (lidAccountId) {
-          const recentMessages = await db.whatsappMessage.findMany({
-            where: {
-              accountId: lidAccountId,
-              direction: { in: ['incoming', 'outgoing'] },
-              createdAt: { gt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) }, // Last 30 days
-            },
-            select: { clientPhone: true, metadata: true },
-            take: 100,
-            orderBy: { createdAt: 'desc' },
-          });
-          
-          // Look for messages where metadata contains this specific LID and has a real phone
-          let resolvedFromDb = false;
-          for (const msg of recentMessages) {
-            const meta = msg.metadata as Record<string, unknown> | null;
-            // Check if this message was from the same LID
-            if (meta?.originalLid === lidValue || meta?.lidIdentifier === phone || meta?.resolvedFromLid?.includes(lidValue)) {
-              // Found a previous message from this same LID that was stored with a real phone
-              if (msg.clientPhone && !isLidIdentifier(msg.clientPhone) && isValidPhoneNumber(msg.clientPhone.replace(/\D/g, ''))) {
-                phone = msg.clientPhone;
-                setCachedLidPhone(`lid:${lidValue}`, msg.clientPhone);
-                console.log(`[Webhook] LID resolved via DB metadata lookup to: ${phone}`);
-                resolvedFromDb = true;
-                break;
-              }
+        if (existingClient && isValidPhoneNumber(existingClient.phone.replace(/\D/g, ''))) {
+          phone = existingClient.phone.replace(/\D/g, '');
+          setCachedLidPhone(`lid:${lidValue}`, phone);
+          console.log(`[Webhook] LID resolved via Client whatsappLid lookup to: ${phone} (client: ${existingClient.name})`);
+        }
+      }
+      
+      // Method 1: Try Evolution API resolution (most reliable for new LIDs)
+      if (isLidIdentifier(phone)) {
+        const resolvedPhone = await resolveLidToPhone(instanceName, phone);
+        if (resolvedPhone && isValidPhoneNumber(resolvedPhone)) {
+          phone = resolvedPhone;
+          console.log(`[Webhook] LID resolved via Evolution API to: ${phone}`);
+        }
+      }
+      
+      // Method 2: Look for previous messages from this SAME LID in the database
+      // that were associated with a real phone number
+      if (isLidIdentifier(phone) && lidAccountId) {
+        const recentMessages = await db.whatsappMessage.findMany({
+          where: {
+            accountId: lidAccountId,
+            direction: { in: ['incoming', 'outgoing'] },
+            createdAt: { gt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) },
+          },
+          select: { clientPhone: true, metadata: true },
+          take: 100,
+          orderBy: { createdAt: 'desc' },
+        });
+        
+        for (const msg of recentMessages) {
+          const meta = msg.metadata as Record<string, unknown> | null;
+          if (meta?.originalLid === lidValue || meta?.lidIdentifier === phone || meta?.resolvedFromLid?.includes(lidValue)) {
+            if (msg.clientPhone && !isLidIdentifier(msg.clientPhone) && isValidPhoneNumber(msg.clientPhone.replace(/\D/g, ''))) {
+              phone = msg.clientPhone;
+              setCachedLidPhone(`lid:${lidValue}`, msg.clientPhone);
+              console.log(`[Webhook] LID resolved via DB metadata lookup to: ${phone}`);
+              break;
             }
           }
-          
-          if (!resolvedFromDb) {
-            console.warn(`[Webhook] ⚠️ Could not resolve LID ${lidValue} to a real phone. Will use JID-based sending via originalJid: ${originalJid}`);
-          }
         }
+      }
+      
+      if (isLidIdentifier(phone)) {
+        console.warn(`[Webhook] ⚠️ Could not resolve LID ${lidValue} to a real phone. Will use JID-based sending via originalJid: ${originalJid}`);
       }
     } catch (lidError) {
       console.error(`[Webhook] Error during LID resolution: ${lidError instanceof Error ? lidError.message : lidError}`);

@@ -582,6 +582,83 @@ export async function resolveLidToPhone(
       console.log('[LID-Resolution] fetchContacts endpoint failed:', err);
     }
 
+    // Method 6: Try fetchChats - search recent chats for this LID
+    // Sometimes the chat list includes the real @s.whatsapp.net JID alongside the LID
+    try {
+      const response = await fetch(
+        `${systemConfig.apiUrl}/chat/fetchChats/${instanceName}`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'apikey': systemConfig.apiKey,
+          },
+          body: JSON.stringify({
+            where: {
+              id: lidJid
+            }
+          })
+        }
+      );
+
+      if (response.ok) {
+        const data = await response.json();
+        const chats = Array.isArray(data) ? data : [data];
+        
+        for (const chat of chats) {
+          // Check if the chat has a real @s.whatsapp.net JID
+          const chatId = chat?.id || '';
+          if (chatId.includes('@s.whatsapp.net')) {
+            const phoneFromJid = chatId.split('@')[0];
+            if (isValidPhoneNumber(phoneFromJid)) {
+              console.log(`[LID-Resolution] LID resolved via fetchChats to: ${phoneFromJid}`);
+              setCachedLidPhone(lidIdentifier, phoneFromJid);
+              await saveLidMapping(lidValue, lidJid, instanceName, phoneFromJid, 'fetchChats');
+              return phoneFromJid;
+            }
+          }
+          
+          // Check if the chat has contact info with real phone
+          const contact = chat?.contact || chat;
+          const phoneCandidates = [
+            contact?.id?.split('@')[0],
+            contact?.jid?.split('@')[0],
+            contact?.phoneNumber,
+            contact?.number,
+            contact?.notify,
+          ].filter(Boolean);
+          
+          for (const candidate of phoneCandidates) {
+            const candidateStr = String(candidate);
+            if (isValidPhoneNumber(candidateStr) && !candidateStr.includes(lidValue)) {
+              console.log(`[LID-Resolution] LID resolved via fetchChats (contact field) to: ${candidateStr}`);
+              setCachedLidPhone(lidIdentifier, candidateStr);
+              await saveLidMapping(lidValue, lidJid, instanceName, candidateStr, 'fetchChats-contact');
+              return candidateStr;
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.log('[LID-Resolution] fetchChats endpoint failed:', err);
+    }
+
+    // Method 7: Search database for previously resolved LID mappings
+    // If another account or a previous session resolved this LID, use the cached result
+    try {
+      const existingMapping = await db.lidMapping.findUnique({
+        where: { lid: lidValue }
+      });
+      
+      if (existingMapping?.resolvedPhone && existingMapping.status === 'resolved' && isValidPhoneNumber(existingMapping.resolvedPhone)) {
+        console.log(`[LID-Resolution] LID resolved via DB LidMapping to: ${existingMapping.resolvedPhone} (method: ${existingMapping.resolutionMethod})`);
+        setCachedLidPhone(lidIdentifier, existingMapping.resolvedPhone);
+        return existingMapping.resolvedPhone;
+      }
+    } catch (dbErr) {
+      console.log('[LID-Resolution] DB LidMapping lookup failed:', dbErr);
+    }
+
     console.log(`[LID-Resolution] Could not resolve LID ${lidJid} to a valid phone number`);
     // Save failed resolution attempt to LidMapping table for future retry
     await saveLidMapping(lidValue, lidJid, instanceName);
