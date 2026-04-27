@@ -55,6 +55,9 @@ export interface SalonContext {
     originalPrice: number;
     services: string[];
   }[];
+  businessCategory: string;
+  aiTone: string;
+  aiConfig: any | null;
 }
 
 export interface ClientContext {
@@ -694,7 +697,10 @@ export async function getSalonContext(accountId: string): Promise<SalonContext> 
     whatsappNumber: account.whatsappNumber || '',
     services: services as any[],
     professionals,
-    packages
+    packages,
+    businessCategory: (account as any).businessCategory || 'beauty',
+    aiTone: (account as any).aiTone || 'friendly',
+    aiConfig: (account as any).aiConfig || null,
   };
 }
 
@@ -956,7 +962,7 @@ function calculateServiceFrequency(appointments: any[]): ClientContext['serviceF
 
 /**
  * Gera o prompt do sistema com contexto — otimizado para ~800 tokens
- * (versão anterior consumia ~1800 tokens, redução de ~55%)
+ * Supports multi-niche: barber, beauty, aesthetics, dental
  */
 export async function generateSystemPrompt(
   accountId: string,
@@ -974,17 +980,25 @@ export async function generateSystemPrompt(
   const address = [salon.address, salon.city, salon.state].filter(Boolean).join(', ') || null;
   const open = salon.workingDays.includes(salonNow.dayOfWeek);
   
-  // Compact service list: "Manicure R$50 (60min)" instead of bullet+description
+  // Get niche-specific configuration
+  const niche = salon.businessCategory || 'beauty';
+  const tone = salon.aiTone || 'friendly';
+  const nicheConfig = getNicheConfig(niche);
+  const aiName = salon.aiConfig && typeof salon.aiConfig === 'object' && (salon.aiConfig as any).aiName 
+    ? (salon.aiConfig as any).aiName 
+    : nicheConfig.aiName;
+  
+  // Compact service list
   const svc = salon.services.map(s => `${s.name} R$${s.price.toFixed(0)} (${s.durationMinutes}min)`).join(' | ');
   
-  // Compact professionals: "Ana: manicure, pedicure (9-18h)"
+  // Compact professionals
   const prof = salon.professionals.map(p => {
     const spec = p.specialties.length > 0 ? `: ${p.specialties.join(',')}` : '';
     const hr = p.openingTime && p.closingTime ? ` (${p.openingTime}-${p.closingTime})` : '';
     return `${p.name}${spec}${hr}`;
   }).join(' | ');
   
-  // Compact packages: "Combo Beleza R$80 (manicure+pedicure) save R$20"
+  // Compact packages
   const pkg = salon.packages.length > 0
     ? salon.packages.map(p => {
         const save = p.originalPrice > p.price ? ` save R$${(p.originalPrice - p.price).toFixed(0)}` : '';
@@ -1013,7 +1027,6 @@ export async function generateSystemPrompt(
     if (!hasBday) parts.push('SEM niver');
     if (client.loyaltyPoints > 0) parts.push(`Fidelidade: ${client.loyaltyPoints}pts`);
     
-    // Compact last services (max 3)
     const lastSvc = client.lastServices
       .filter(s => s.status !== 'cancelled' && s.status !== 'canceled')
       .slice(0, 3)
@@ -1021,18 +1034,16 @@ export async function generateSystemPrompt(
       .join(', ');
     if (lastSvc) parts.push(`Histórico: ${lastSvc}`);
     
-    // Upcoming appointments (max 5) - include ID for cancel/reschedule
     const upc = client.upcomingAppointments.slice(0, 5)
       .map(a => `${a.serviceName} ${formatDate(a.date)} ${formatTime(a.date)}(id:${a.id.slice(0,8)})`)
       .join(', ');
     if (upc) parts.push(`Agendado: ${upc}`);
     
     if (client.preferredServices.length > 0) parts.push(`Prefere: ${client.preferredServices.join(',')}`);
-    if (client.preferredProfessional) parts.push(`Profissional pref: ${client.preferredProfessional}`);
+    if (client.preferredProfessional) parts.push(`${nicheConfig.professionalLabel} pref: ${client.preferredProfessional}`);
     if (client.isNewClient) parts.push('CLIENTE NOVO');
     if (client.aiNotes) parts.push(`Obs IA: ${client.aiNotes.substring(0, 80)}`);
     
-    // Proactive hints (compact, max 2)
     const hints: string[] = [];
     if (client.daysSinceLastVisit !== null && client.daysSinceLastVisit > 14) {
       hints.push(`Sugira retorno (${client.daysSinceLastVisit}d ausente)`);
@@ -1044,7 +1055,6 @@ export async function generateSystemPrompt(
     
     if (isLidPhone(client.phone)) parts.push('Pergunte telefone');
     
-    // LID-specific instruction: add a clear instruction for the AI to naturally ask for phone number
     if (client.phone.startsWith('lid:') || client.phone.startsWith('jid:')) {
       parts.push('IMPORTANTE: Telefone pendente (formato LID). Sempre pergunte o telefone de forma natural no início da conversa para enviar confirmações e lembretes');
     }
@@ -1054,14 +1064,16 @@ export async function generateSystemPrompt(
     ctx = 'CLIENTE NOVO. Pergunte nome, apresente serviços, pergunte forma pagamento. Se PIX sem CPF, pergunte CPF.';
   }
   
-  // Build the compact system prompt
-  let prompt = `Você é Luna, recepcionista virtual do ${salon.businessName}. Simpática, profissional e OBJETIVA.
+  // Build the system prompt with niche-specific language
+  const serviceCmd = nicheConfig.serviceCommandLabel;
+  
+  let prompt = `Você é ${aiName}, ${nicheConfig.roleDescription} do ${salon.businessName}. ${nicheConfig.personalityTrait}
 
-Salão: ${salon.businessName} | ${address || 'sem endereço'}${salon.whatsappNumber ? ' | WhatsApp: ' + salon.whatsappNumber : ''}
+${nicheConfig.establishmentLabel}: ${salon.businessName} | ${address || 'sem endereço'}${salon.whatsappNumber ? ' | WhatsApp: ' + salon.whatsappNumber : ''}
 Horário: ${salon.openingTime}-${salon.closingTime} ${salon.workingDays.map(d => dayNames[d]).join(',')} | Hoje: ${dayName} ${todayStr} ${salonNow.timeStr} ${open ? 'ABERTO' : 'FECHADO'} (TZ: ${salonTz})
 ${salon.googleMapsUrl ? 'Maps: ' + salon.googleMapsUrl : ''}
-Serviços: ${svc}
-Profissionais: ${prof || 'não informado'}
+${nicheConfig.serviceLabel}: ${svc}
+${nicheConfig.professionalLabel}: ${prof || 'não informado'}
 ${pkg ? 'Pacotes: ' + pkg : ''}
 ${ctx}
 
@@ -1071,41 +1083,41 @@ REGRAS IMPORTANTES:
 3. Se o cliente tem agendamentos futuros, MENCIONE eles antes de criar novos.
 4. Se o cliente quer agendar para outra pessoa, pergunte o NOME e TELEFONE dessa pessoa.
 5. Cliente novo→pergunte nome. Sem CPF e quer PIX→pergunte CPF ANTES de agendar.
-6. QUANDO O CLIENTE PERGUNTAR SOBRE SEUS AGENDAMENTOS ("tenho horário?", "marquei algo?", "meus agendamentos"), CONSULTE o campo "Agendado:" acima e RESPONDA com os agendamentos existentes. Se não houver agendamentos, diga que não há agendamentos futuros e ofereça ajuda para agendar.
-7. NUNCA responda com lista de serviços quando o cliente pergunta sobre SEUS agendamentos existentes.
-8. Se o cliente quiser CANCELAR um agendamento, confirme qual agendamento e inclua [CANCELAR:id].
+6. QUANDO O CLIENTE PERGUNTAR SOBRE SEUS AGENDAMENTOS, CONSULTE o campo "Agendado:" acima e RESPONDA com os agendamentos existentes. Se não houver, ofereça ajudar.
+7. NUNCA responda com lista de ${nicheConfig.serviceLabel.toLowerCase()} quando o cliente pergunta sobre SEUS agendamentos existentes.
+8. Se o cliente quiser CANCELAR um agendamento, confirme qual e inclua [CANCELAR:id].
 9. Se o cliente quiser REAGENDAR, confirme novo horário e inclua [REAGENDAR:id:YYYY-MM-DD:HH:mm].
 
 FLUXO DE CONSULTA DE AGENDAMENTOS:
-- Cliente pergunta sobre seus agendamentos → Veja "Agendado:" no contexto acima e informe.
+- Cliente pergunta sobre seus agendamentos → Veja "Agendado:" no contexto e informe.
 - Se tem agendamento HOJE, destaque: "Você tem agendamento HOJE!"
-- Se NÃO tem agendamentos, diga e ofereça ajudar a agendar.
+- Se NÃO tem, ofereça ajudar a agendar.
 
 FLUXO DE CANCELAMENTO:
-1. Confirme QUAL agendamento o cliente quer cancelar
-2. Inclua: [CANCELAR:id] (use o id do agendamento do campo Agendado)
+1. Confirme QUAL agendamento cancelar
+2. Inclua: [CANCELAR:id] (use o id do campo Agendado)
 
 FLUXO DE REAGENDAMENTO:
-1. Confirme QUAL agendamento e o NOVO horário
+1. Confirme QUAL agendamento e NOVO horário
 2. Inclua: [REAGENDAR:id:YYYY-MM-DD:HH:mm]
 
 FLUXO DE AGENDAMENTO (siga esta ordem, NÃO pule etapas):
-1. Confirme o SERVIÇO com o cliente (use nome exato da lista)
-2. Confirme o PROFISSIONAL (ou pergunte preferência)
+1. Confirme o ${nicheConfig.serviceSingular.toUpperCase()} com o cliente (use nome exato da lista)
+2. Confirme o ${nicheConfig.professionalLabel.toUpperCase()} (ou pergunte preferência)
 3. Confirme DATA e HORÁRIO (verifique disponibilidade, NUNCA altere sem avisar)
 4. Confirme FORMA DE PAGAMENTO
-5. Só depois de TUDO confirmado, inclua: [AGENDAR:serviço:profissional:YYYY-MM-DD:HH:mm:pagamento]
+5. Só depois de TUDO confirmado, inclua: [AGENDAR:${nicheConfig.serviceSingular}:professional:YYYY-MM-DD:HH:mm:pagamento]
 
 PIX: Sempre que o cliente quiser pagar via PIX, diga "Vou gerar o QR Code PIX!" e inclua [AGENDAR:...:pix]. O sistema gera o QR automaticamente. Se o cliente NÃO tem CPF, PERGUNTE antes de agendar com PIX.
 
 COMANDOS DO SISTEMA:
-[AGENDAR:serviço:profissional:YYYY-MM-DD:HH:mm:pagamento] → Criar agendamento
-Ex: [AGENDAR:Manicure:Ana:2026-04-24:10:00:pix]
-[CANCELAR:id] → Cancelar agendamento (id=primeiros 8 chars do id em Agendado)
+[AGENDAR:${nicheConfig.serviceSingular}:${nicheConfig.professionalLabel}:YYYY-MM-DD:HH:mm:pagamento] → Criar agendamento
+Ex: [AGENDAR:${nicheConfig.exampleService}:${nicheConfig.exampleProfessional}:2026-04-24:10:00:pix]
+[CANCELAR:id] → Cancelar agendamento
 Ex: [CANCELAR:abc12345]
-[REAGENDAR:id:YYYY-MM-DD:HH:mm] → Reagendar (id=primeiros 8 chars do id em Agendado)
+[REAGENDAR:id:YYYY-MM-DD:HH:mm] → Reagendar
 Ex: [REAGENDAR:abc12345:2026-04-25:14:00]
-serviço=nome exato da lista ou "Svc1+Svc2" para combos. profissional=nome exato. pagamento=pix|credit_card|debit_card|cash|in_person.`;
+${nicheConfig.serviceSingular}=nome exato da lista ou "Svc1+Svc2" para combos. ${nicheConfig.professionalLabel}=nome exato. pagamento=pix|credit_card|debit_card|cash|in_person.`;
 
   return prompt;
 }
@@ -1141,4 +1153,77 @@ function statusLabel(status: string): string {
     no_show: 'não compareceu',
   };
   return labels[status] || status;
+}
+
+// ===== NICHE CONFIGURATION =====
+
+interface NicheConfig {
+  aiName: string;
+  serviceLabel: string;       // "Serviços" / "Procedimentos" / "Tratamentos"
+  serviceSingular: string;    // "serviço" / "procedimento" / "tratamento"
+  serviceCommandLabel: string; // What appears in [AGENDAR:xxx]
+  professionalLabel: string;  // "Profissional" / "Barbeiro" / "Dentista"
+  establishmentLabel: string; // "Salão" / "Barbearia" / "Clínica"
+  roleDescription: string;    // "recepcionista virtual" / "assistente virtual"
+  personalityTrait: string;   // Personality description
+  exampleService: string;     // Example for command format
+  exampleProfessional: string; // Example professional name
+}
+
+function getNicheConfig(category: string): NicheConfig {
+  switch (category) {
+    case 'barber':
+      return {
+        aiName: 'Beto',
+        serviceLabel: 'Serviços',
+        serviceSingular: 'serviço',
+        serviceCommandLabel: 'serviço',
+        professionalLabel: 'Barbeiro',
+        establishmentLabel: 'Barbearia',
+        roleDescription: 'assistente virtual',
+        personalityTrait: 'Descontraído, camarada e OBJETIVO. Fala como mano, usa gírias leves.',
+        exampleService: 'Corte+Barba',
+        exampleProfessional: 'Carlos',
+      };
+    case 'dental':
+      return {
+        aiName: 'Dra. Clara',
+        serviceLabel: 'Procedimentos',
+        serviceSingular: 'procedimento',
+        serviceCommandLabel: 'procedimento',
+        professionalLabel: 'Dentista',
+        establishmentLabel: 'Clínica Odontológica',
+        roleDescription: 'assistente virtual',
+        personalityTrait: 'Profissional, atenciosa e OBJETIVA. Usa linguagem formal mas acolhedora.',
+        exampleService: 'Limpeza',
+        exampleProfessional: 'Dra. Ana',
+      };
+    case 'aesthetics':
+      return {
+        aiName: 'Flora',
+        serviceLabel: 'Tratamentos',
+        serviceSingular: 'tratamento',
+        serviceCommandLabel: 'tratamento',
+        professionalLabel: 'Esteticista',
+        establishmentLabel: 'Clínica de Estética',
+        roleDescription: 'consultora virtual',
+        personalityTrait: 'Acolhedora, profissional e OBJETIVA. Fala sobre bem-estar com carinho.',
+        exampleService: 'Peeling',
+        exampleProfessional: 'Julia',
+      };
+    case 'beauty':
+    default:
+      return {
+        aiName: 'Luna',
+        serviceLabel: 'Serviços',
+        serviceSingular: 'serviço',
+        serviceCommandLabel: 'serviço',
+        professionalLabel: 'Profissional',
+        establishmentLabel: 'Salão',
+        roleDescription: 'recepcionista virtual',
+        personalityTrait: 'Simpática, profissional e OBJETIVA.',
+        exampleService: 'Manicure',
+        exampleProfessional: 'Ana',
+      };
+  }
 }

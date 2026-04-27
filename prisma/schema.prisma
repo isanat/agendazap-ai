@@ -40,6 +40,9 @@ model Account {
   reminderMessage        String?
   noShowMessage          String?
   aiAutoReply            Boolean              @default(true)
+  businessCategory       String               @default("beauty")  // barber | beauty | aesthetics | dental
+  aiTone                 String               @default("friendly") // casual | friendly | professional
+  aiConfig               Json?                // Custom AI config per niche (greeting, vocabulary, etc.)
   plan                   String               @default("basic")
   planExpiresAt          DateTime?
   trialEndsAt            DateTime?

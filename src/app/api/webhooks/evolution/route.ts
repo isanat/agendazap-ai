@@ -6,6 +6,8 @@ import { decryptCredentials } from '@/app/api/integrations/route';
 import { getEvolutionApiConfig, isValidPhoneNumber, isLidIdentifier, isJidIdentifier, isNonPhoneIdentifier, resolveLidToPhone, saveLidMapping, findAccountByInstance, setCachedLidPhone, migrateClientLidToPhone } from '@/lib/lid-resolution';
 import { validateBooking, getBookingErrorMessage, getSalonTimezone, createDateInSalonTz, type BookingValidationResult } from '@/lib/booking-validation';
 import { isApiReady, enqueuePendingMessage, getHealthStatus } from '@/lib/evolution-health';
+import { preRouteMessage, type PreRouterResult } from '@/lib/ai/pre-router';
+import { parseBookingCommand, parseCancelCommand, parseRescheduleCommand, cancelAppointment, rescheduleAppointment } from '@/lib/services/booking.service';
 
 /**
  * In-memory processing lock to prevent duplicate AI responses.
@@ -1342,7 +1344,7 @@ function parseRescheduleCommand(aiResponse: string): {
  * Cancel an appointment by short ID (first 8 chars)
  * Only allows cancelling appointments that belong to the given client and are in the future
  */
-async function cancelAppointmentByShortId(
+async function cancelAppointmentByShortId_legacy(
   accountId: string,
   clientId: string,
   shortId: string
@@ -1390,7 +1392,7 @@ async function cancelAppointmentByShortId(
  * Reschedule an appointment by short ID (first 8 chars)
  * Only allows rescheduling appointments that belong to the given client and are in the future
  */
-async function rescheduleAppointmentByShortId(
+async function rescheduleAppointment_legacy(
   accountId: string,
   clientId: string,
   shortId: string,
@@ -2276,7 +2278,8 @@ async function processMessageWithAI(
 
     // Generate AI response with full context
     console.log(`[Webhook] 🤖 Generating AI response for phone: ${phoneForContext}...`);
-    let rawResponse = await generateAIResponse(accountId, phoneForContext, message);
+    const aiResult = await generateAIResponse(accountId, phoneForContext, message);
+    let rawResponse = aiResult.response;
     
     // If the client has an unresolved LID (phone starts with lid:), add a note to the AI context
     // suggesting the AI should ask the client for their phone number.
@@ -2326,19 +2329,19 @@ async function processMessageWithAI(
       let { cleanedResponse, booking } = parseBookingCommand(rawResponse);
       
       // Parse cancel command from AI response
-      let cancelResult: Awaited<ReturnType<typeof cancelAppointmentByShortId>> | undefined;
+      let cancelResult: Awaited<ReturnType<typeof cancelAppointment>> | undefined;
       const cancelParsed = parseCancelCommand(cleanedResponse);
       cleanedResponse = cancelParsed.cleanedResponse;
       
       // Parse reschedule command from AI response
-      let rescheduleResult: Awaited<ReturnType<typeof rescheduleAppointmentByShortId>> | undefined;
+      let rescheduleResult: Awaited<ReturnType<typeof rescheduleAppointment>> | undefined;
       const rescheduleParsed = parseRescheduleCommand(cleanedResponse);
       cleanedResponse = rescheduleParsed.cleanedResponse;
       
       // Process CANCEL command
       if (cancelParsed.cancel) {
         console.log(`[Webhook] 🗑️ Cancel command detected: id=${cancelParsed.cancel.appointmentShortId}`);
-        cancelResult = await cancelAppointmentByShortId(accountId, clientId, cancelParsed.cancel.appointmentShortId);
+        cancelResult = await cancelAppointment(accountId, clientId, cancelParsed.cancel.appointmentShortId);
         if (cancelResult.success) {
           console.log(`[Webhook] ✅ Appointment cancelled successfully: ${cancelResult.appointmentInfo}`);
         } else {
@@ -2349,7 +2352,7 @@ async function processMessageWithAI(
       // Process RESCHEDULE command
       if (rescheduleParsed.reschedule) {
         console.log(`[Webhook] 🔄 Reschedule command detected: id=${rescheduleParsed.reschedule.appointmentShortId} → ${rescheduleParsed.reschedule.date} ${rescheduleParsed.reschedule.time}`);
-        rescheduleResult = await rescheduleAppointmentByShortId(
+        rescheduleResult = await rescheduleAppointment(
           accountId,
           clientId,
           rescheduleParsed.reschedule.appointmentShortId,
@@ -2704,12 +2707,20 @@ async function generateAIResponse(
   accountId: string,
   phone: string,
   message: string
-): Promise<string | null> {
+): Promise<{ response: string | null; routedBy: 'pre_router' | 'llm' | 'fallback' }> {
   try {
+    // ===== LAYER 1: Pre-Router (deterministic, ~40% of messages) =====
+    const preRouterResult = await preRouteMessage(message, accountId);
+    if (preRouterResult.handled && preRouterResult.response) {
+      console.log(`[Webhook] ⚡ Pre-Router handled message (category: ${preRouterResult.category})`);
+      return { response: preRouterResult.response, routedBy: 'pre_router' };
+    }
+
+    // ===== LAYER 2: LLM + Tool Calling =====
     const canUse = await canAccountUseAI(accountId);
     if (!canUse.allowed) {
       console.log(`[Webhook] AI not available for account ${accountId}: ${canUse.reason}`);
-      return getFallbackResponse(accountId, message);
+      return { response: await getFallbackResponse(accountId, message), routedBy: 'fallback' };
     }
 
     // Generate system prompt with full salon and client context
@@ -2747,11 +2758,11 @@ async function generateAIResponse(
     }
 
     console.log(`[Webhook] ✅ AI response via ${result.provider} (${result.totalTokens} tokens, fallback: ${result.fallbackUsed})`);
-    return result.content || getFallbackResponse(accountId, message);
+    return { response: result.content || await getFallbackResponse(accountId, message), routedBy: 'llm' };
 
   } catch (error) {
     console.error('[Webhook] ❌ Error generating AI response:', error);
-    return getFallbackResponse(accountId, message);
+    return { response: await getFallbackResponse(accountId, message), routedBy: 'fallback' };
   }
 }
 
