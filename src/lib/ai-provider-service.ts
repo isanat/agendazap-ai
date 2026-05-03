@@ -51,8 +51,11 @@ export interface ChatCompletionResult {
   fallbackUsed?: boolean;
 }
 
-// Zhipu AI Configuration - uses environment variable or database
-const ZHIPU_API_URL = process.env.ZHIPU_API_URL || 'https://open.bigmodel.cn/api/paas/v4';
+// Z.AI / Zhipu AI Configuration
+// Z.AI platform API (api.z.ai) is the global endpoint that works from Brazil
+// open.bigmodel.cn is the Chinese-only endpoint that blocks non-China regions
+const ZAI_PLATFORM_URL = 'https://api.z.ai/api/paas/v4';
+const ZHIPU_API_URL = process.env.ZHIPU_API_URL || ZAI_PLATFORM_URL;
 const ZHIPU_API_KEY = process.env.ZHIPU_API_KEY;
 
 // Singleton ZAI SDK client
@@ -380,10 +383,10 @@ async function callZhipuAI(
   messages: ChatMessage[],
   model: string = 'GLM-4.5-Air'
 ): Promise<{ content: string; inputTokens: number; outputTokens: number }> {
-  // Model fallback chain: requested model -> GLM-4.5-Air -> glm-4-flash-250414 -> GLM-4.7-Flash
-  // Updated 2025: glm-4-air and glm-4-flash return error 1211 (model not found)
-  // New valid models: GLM-4.5-Air (Z.ai), glm-4-flash-250414 (Zhipu direct), GLM-4.7-Flash (Z.ai)
-  const modelFallbacks = [model, 'GLM-4.5-Air', 'glm-4-flash-250414', 'GLM-4.7-Flash'];
+  // Model fallback chain for Z.AI platform (api.z.ai)
+  // Valid models as of 2026: glm-4-plus, GLM-4.5-Air (tested and confirmed working)
+  // Invalid/deprecated models: glm-4-flash, glm-4-air, glm-4-flash-250414, GLM-4.7-Flash (error 1211)
+  const modelFallbacks = [model, 'GLM-4.5-Air', 'glm-4-plus'];
   
   console.log(`[AI] callZhipuAI: Starting with requested model: ${model}, fallbacks: ${modelFallbacks.join(', ')}`);
   const startTime = Date.now();
@@ -499,8 +502,8 @@ async function callZhipuAI(
   }
   
   // Only try 2 models via direct API (to stay within time budget)
-  // Updated 2025: glm-4-air deprecated, use GLM-4.5-Air and glm-4-flash-250414
-  const directApiModels = model === 'GLM-4.5-Air' ? ['GLM-4.5-Air', 'glm-4-flash-250414'] : [model, 'GLM-4.5-Air'];
+  // Valid models: GLM-4.5-Air, glm-4-plus
+  const directApiModels = model === 'GLM-4.5-Air' ? ['GLM-4.5-Air', 'glm-4-plus'] : [model, 'GLM-4.5-Air'];
   
   for (const tryModel of directApiModels) {
     const elapsed = Date.now() - startTime;
@@ -865,8 +868,8 @@ export async function generateChatCompletion(
       // Select model based on subscription plan
       const planModel = getModelForPlan(aiModelType, provider.name, provider.model);
 
-      // Use Zhipu AI public API for ZAI provider
-      if (provider.name.toLowerCase() === 'zai') {
+      // Use Zhipu AI / Z.AI platform API for ZAI and Zhipu providers
+      if (provider.name.toLowerCase() === 'zai' || provider.name.toLowerCase() === 'zhipu') {
         result = await callZhipuAI(messages, planModel);
       } else if (provider.name.toLowerCase() === 'groq') {
         result = await callGroq(provider, messages, planModel);
@@ -935,7 +938,7 @@ export async function checkProvidersHealth(): Promise<Record<string, { status: s
       // Simple test message
       const messages: ChatMessage[] = [{ role: 'user', content: 'ping' }];
       
-      if (provider.name.toLowerCase() === 'zai') {
+      if (provider.name.toLowerCase() === 'zai' || provider.name.toLowerCase() === 'zhipu') {
         await callZhipuAI(messages, (!provider.model || provider.model === 'default' || provider.model === 'glm-4-air' || provider.model === 'glm-4-flash') ? 'GLM-4.5-Air' : provider.model);
       } else if (provider.name.toLowerCase() === 'groq') {
         await callGroq(provider, messages);
