@@ -393,14 +393,41 @@ async function callZhipuAI(
   
   // Method 1: Try Z.ai platform API
   // Uses ZAI_BASE_URL/ZAI_API_KEY, or ZHIPU_API_URL/ZHIPU_API_KEY as fallback
-  // The Z.ai platform API format is: POST {baseUrl}/chat/completions with X-Z-AI-From header
+  // Also falls back to API key from database (AIProvider table) if env vars not set
   const zaiBaseUrl = process.env.ZAI_BASE_URL;
   const zaiApiKey = process.env.ZAI_API_KEY;
   
-  // If ZAI_BASE_URL is not set, try using ZHIPU_API_URL as the base URL
-  // This works if the ZHIPU_API_KEY is actually a Zhipu AI JWT token
-  const platformBaseUrl = zaiBaseUrl || (ZHIPU_API_KEY ? ZHIPU_API_URL : null);
-  const platformApiKey = zaiApiKey || ZHIPU_API_KEY || null;
+  // Build platform credentials with multiple fallback sources:
+  // 1. ZAI_BASE_URL/ZAI_API_KEY env vars (preferred)
+  // 2. ZHIPU_API_URL/ZHIPU_API_KEY env vars
+  // 3. Database AIProvider table (fetched lazily below)
+  let platformBaseUrl = zaiBaseUrl || (ZHIPU_API_KEY ? ZHIPU_API_URL : null);
+  let platformApiKey = zaiApiKey || ZHIPU_API_KEY || null;
+  
+  // If no platform credentials from env vars, try database
+  if (!platformBaseUrl || !platformApiKey) {
+    try {
+      const dbProviders = await getEnabledProviders();
+      const zaiDb = dbProviders.find(p => p.name.toLowerCase() === 'zai' || p.name.toLowerCase() === 'zhipu');
+      if (zaiDb) {
+        if (!platformBaseUrl && zaiDb.baseUrl) {
+          platformBaseUrl = zaiDb.baseUrl;
+          console.log('[AI] Using base URL from database (ZAI/Zhipu provider)');
+        }
+        if (!platformApiKey && zaiDb.apiKey) {
+          platformApiKey = zaiDb.apiKey;
+          console.log('[AI] Using API key from database (ZAI/Zhipu provider)');
+        }
+      }
+    } catch (e) {
+      console.log('[AI] Could not fetch provider from database:', e instanceof Error ? e.message : e);
+    }
+  }
+  
+  // Default to Z.AI platform URL if still not set (api.z.ai works globally)
+  if (!platformBaseUrl) {
+    platformBaseUrl = ZAI_PLATFORM_URL;
+  }
   
   if (platformBaseUrl && platformApiKey) {
     for (const tryModel of modelFallbacks) {
