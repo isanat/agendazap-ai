@@ -108,3 +108,33 @@ Stage Summary:
 - Vercel deployment is LIVE at agendazap-apmuma6u4-isanats-projects.vercel.app
 - Local dev server running at localhost:3000 with HTTP 200
 - Database synced with reverted schema (some columns from later commits dropped)
+
+---
+Task ID: 6
+Agent: Main
+Task: Fix AI pipeline - the core blocker preventing production
+
+Work Log:
+- Diagnosed root cause: ALL 3 AI providers were failing
+  - Zhipu (open.bigmodel.cn): 403 "unsupported_country_region_territory" — blocks Brazil
+  - Z.AI/Zhipu direct: 401 "身份验证失败" — wrong URL endpoint
+  - Groq: 403 "Forbidden" — expired API key
+- Discovered Z.AI has a GLOBAL endpoint (api.z.ai) vs Chinese-only (open.bigmodel.cn)
+- Tested Z.AI API directly: glm-4-plus ✅ GLM-4.5-Air ✅ (both work from Brazil)
+- Updated ZHIPU_API_URL default from open.bigmodel.cn to api.z.ai
+- Updated model fallback chain: GLM-4.5-Air → glm-4-plus (removed deprecated models)
+- Updated Groq API key in database: GROQ_API_KEY_REDACTED
+- Updated ZAI/Zhipu API key in database: ed6a82df711947778e3f7dbe7773bdb6.nrydZc7MImQwWWgM
+- Updated ZAI/Zhipu base URL in database: https://api.z.ai/api/paas/v4
+- Made both 'zhipu' and 'zai' providers use callZhipuAI() (proper fallback chain)
+- Added database fallback for API credentials when env vars not set (Vercel compatibility)
+- Synced schema.postgresql.prisma with schema.prisma
+- Tested end-to-end: AI now responds correctly with real salon context
+- Tested booking flow: AI asks correct questions, follows conversation flow
+
+Stage Summary:
+- AI PIPELINE IS NOW WORKING — the primary blocker is FIXED
+- Provider: Zhipu/Z.AI with GLM-4.5-Air model, ~5-7s response time
+- Fallback: Groq with llama-3.3-70b-versatile
+- Works without env vars on Vercel (reads from database)
+- Commits pushed: af7568f, d7c8c6b, 4d4b998
