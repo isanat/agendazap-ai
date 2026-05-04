@@ -83,3 +83,22 @@ Stage Summary:
 - Latest code deployed to Vercel (production)
 - URL: https://agendazap-ai.vercel.app
 - From now on, every git push to main will auto-deploy to Vercel
+
+---
+Task ID: 1
+Agent: Main
+Task: Fix AI listing all services instead of calculating client's appointment total
+
+Work Log:
+- Found root cause: Pre-router FAQ service was intercepting "quanto devo pagar?" as a general pricing question, returning the full service list WITHOUT calling the LLM
+- The AI rules (rule 7 and 8) about summing appointment prices never got applied because the message never reached the LLM
+- Also found same issue with hours questions: "tenho agendamento em qual horário?" was intercepted by FAQ returning business hours instead of client's appointment time
+- Fixed faq.service.ts: Added isMyAppointmentValueQuestion() and isMyAppointmentTimeQuestion() functions that detect when client is asking about THEIR specific appointments vs general info
+- Fixed ai-context-service.ts: Strengthened rule 8 with clearer examples and explicit flow for "quanto devo pagar" in appointment consultation
+- Fixed evolution/route.ts: Updated fallback response to not list all services when client asks about their own appointment value
+- Committed and pushed to GitHub (bb99c30)
+
+Stage Summary:
+- Root cause: FAQ pre-router intercepting appointment-specific questions as general FAQ
+- Fixed 3 files: faq.service.ts, ai-context-service.ts, evolution/route.ts
+- Deploy: Pushed to GitHub, Vercel auto-deploy triggered (token expired, couldn't verify)
