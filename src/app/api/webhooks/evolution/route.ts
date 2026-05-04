@@ -2660,7 +2660,7 @@ async function generateAIResponse(
 ): Promise<{ response: string | null; routedBy: 'pre_router' | 'llm' | 'fallback' }> {
   try {
     // ===== LAYER 1: Pre-Router (deterministic, ~40% of messages) =====
-    const preRouterResult = await preRouteMessage(message, accountId);
+    const preRouterResult = await preRouteMessage(message, accountId, phone);
     if (preRouterResult.handled && preRouterResult.response) {
       console.log(`[Webhook] ⚡ Pre-Router handled message (category: ${preRouterResult.category})`);
       return { response: preRouterResult.response, routedBy: 'pre_router' };

@@ -5,11 +5,16 @@
  * Part of the 3-layer architecture:
  *   Pre-Router (deterministic) → LLM + Tool Calling → Services
  * 
+ * IMPORTANT: The FAQ must NOT intercept messages that are part of an active
+ * conversation about appointments. Follow-up questions like "qual horário?"
+ * or "quanto devo pagar?" in the context of an ongoing booking conversation
+ * must go to the LLM for contextual answers.
+ * 
  * Handles:
- * - Pricing questions ("quanto custa?", "preço?")
- * - Hours questions ("que horas?", "horário?")
+ * - Pricing questions ("quanto custa?", "preço?") — ONLY general, not about my appointments
+ * - Hours questions ("que horas abre?", "horário de funcionamento?") — ONLY business hours
  * - Address questions ("onde fica?", "endereço?")
- * - Services list ("quais serviços?", "o que fazem?")
+ * - Services list ("quais serviços vocês têm?")
  * - Thanks/goodbye ("obrigado", "valeu")
  */
 
@@ -24,12 +29,26 @@ export interface FaqResponse {
 /**
  * Try to answer the message with a deterministic FAQ template.
  * Returns { answered: true, response } if matched, { answered: false } otherwise.
+ * 
+ * Now accepts optional phone parameter for conversation context checking.
  */
 export async function tryFaqResponse(
   message: string,
-  accountId: string
+  accountId: string,
+  phone?: string
 ): Promise<FaqResponse> {
   const lower = message.trim().toLowerCase();
+  
+  // ===== CONVERSATION CONTEXT CHECK =====
+  // If there's an active conversation (recent messages about appointments/scheduling),
+  // the FAQ should NOT intercept follow-up questions. Let the LLM handle them with context.
+  if (phone) {
+    const hasActiveConversation = await checkActiveConversation(accountId, phone);
+    if (hasActiveConversation) {
+      console.log(`[FAQ] Active conversation detected for ${phone}, skipping FAQ`);
+      return { answered: false, response: null, category: 'none' };
+    }
+  }
   
   // 1. Pricing questions
   if (isPricingQuestion(lower)) {
@@ -83,20 +102,71 @@ export async function tryFaqResponse(
   return { answered: false, response: null, category: 'none' };
 }
 
+// ===== CONVERSATION CONTEXT =====
+
+/**
+ * Check if there's an active conversation about appointments/scheduling.
+ * If the client has sent/received messages in the last 10 minutes that are
+ * about scheduling, appointments, or booking, we should NOT intercept with FAQ.
+ * 
+ * This prevents the FAQ from answering "qual horário?" with business hours
+ * when the client is actually asking about their appointment time.
+ */
+async function checkActiveConversation(accountId: string, phone: string): Promise<boolean> {
+  try {
+    // Check for recent messages (last 10 minutes) in this conversation
+    const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000);
+    
+    const recentMessages = await db.whatsappMessage.findMany({
+      where: {
+        accountId,
+        clientPhone: { contains: phone.slice(-9) },
+        createdAt: { gte: tenMinutesAgo },
+      },
+      select: {
+        direction: true,
+        message: true,
+        createdAt: true,
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 6, // Check last 6 messages
+    });
+    
+    if (recentMessages.length < 2) {
+      return false; // Not enough messages for a conversation
+    }
+    
+    // Check if recent messages contain appointment/scheduling keywords
+    const appointmentKeywords = [
+      'agendamento', 'agendar', 'agendado', 'marcar', 'horário',
+      'corte', 'barba', 'manicure', 'pedicure', 'sobrancelha',
+      'profissional', 'roberto', 'confirmado', 'confirmar',
+      'cancelar', 'reagendar', 'atendimento',
+      // Booking confirmation patterns from AI responses
+      'com roberto', 'com ana', 'com carlos', 'com maria',
+      'às 1', 'às 2', 'às 3', 'às 4', 'às 5', 'às 6', 'às 7', 'às 8', 'às 9',
+      'às 10', 'às 11', 'às 12', 'às 13', 'às 14', 'às 15', 'às 16', 'às 17', 'às 18', 'às 19', 'às 20',
+    ];
+    
+    const hasAppointmentContext = recentMessages.some(msg => {
+      const msgLower = (msg.message || '').toLowerCase();
+      return appointmentKeywords.some(kw => msgLower.includes(kw));
+    });
+    
+    return hasAppointmentContext;
+  } catch (error) {
+    // If we can't check conversation context, be conservative and don't block FAQ
+    console.warn('[FAQ] Error checking conversation context:', error);
+    return false;
+  }
+}
+
 // ===== PATTERN MATCHING =====
 
 /**
  * Check if the message is a question about MY appointment value/total.
  * These should NOT be handled by FAQ — they need the LLM to calculate the sum
  * of the client's specific appointments.
- * 
- * Examples that should fall through to LLM:
- * - "quanto devo pagar?" (how much should I pay?)
- * - "qual o valor do meu agendamento?" (what's the value of my appointment?)
- * - "quanto vou pagar?" (how much will I pay?)
- * - "sabe quanto devo?" (do you know how much I owe?)
- * - "qual o valor que devo pagar?" (what value should I pay?)
- * - "quanto fica meu agendamento" (how much is my appointment)
  */
 function isMyAppointmentValueQuestion(lower: string): boolean {
   const patterns = [
@@ -131,8 +201,13 @@ function isPricingQuestion(lower: string): boolean {
     return false;
   }
   
+  // Also skip if message contains appointment context keywords
+  if (/\bagendad[oa]\b|\bagendamento\b|\bmeu\b.*\bservi[çc]o\b/.test(lower)) {
+    return false;
+  }
+  
   const patterns = [
-    /preço|precos|preç(o|os)|quanto|valor|valores|custo|custa|tarifa|tabela/,
+    /preço|precos|preç(o|os)|valor|valores|custo|custa|tarifa|tabela/,
     /quanto (custa|fica|é|ta|tá)|quanto (é|custa|fica) (o|a|um|uma)/,
     /qual (o|a) (preço|valor|custo)|lista de (preço|valor)/,
     /tabela de (preço|preço)|preço(.*)serviço|serviço(.*)preço/,
@@ -148,7 +223,7 @@ function isPricingQuestion(lower: string): boolean {
 function isMyAppointmentTimeQuestion(lower: string): boolean {
   const patterns = [
     /meu (agendamento|atendimento|horário|hora)/,
-    /horário (do |do )?meu (agendamento|atendimento)/,
+    /horário (do |da )?meu (agendamento|atendimento)/,
     /que (horário|hora) (é |e |está )?meu/,
     /(agendamento|atendimento) .*horário|horário.*(agendamento|atendimento)/,
     /tenho agendamento.*horário|horário.*tenho agendamento/,
@@ -167,19 +242,39 @@ function isHoursQuestion(lower: string): boolean {
     return false;
   }
   
+  // Short "qual horário?" or "que horas?" are too ambiguous without context.
+  // Only match if there's clear business hours context.
+  // "qual horário" alone is likely about their appointment, not business hours.
+  if (/^qual hor[áa]rio[\s!?]*$/.test(lower)) {
+    return false;
+  }
+  if (/^que horas[\s!?]*$/.test(lower)) {
+    return false;
+  }
+  if (/^qual hora[\s!?]*$/.test(lower)) {
+    return false;
+  }
+  
+  // Also skip "qual horário?" when it's clearly a follow-up (short message with question mark)
+  const words = lower.split(/\s+/).filter(w => w.length > 0);
+  if (words.length <= 3 && /hor[áa]rio|hora/.test(lower) && /\?/.test(lower)) {
+    return false; // Too short and ambiguous - let LLM handle with context
+  }
+  
   const patterns = [
-    /horário|horario|hora|horas|funcionamento|aberto|fechado|abrem|fecham/,
-    /que horas|a que hora|qual (o|a) horário|horário de (funcionamento|atendimento)/,
+    /horário de funcionamento|horário de atendimento/,
+    /que horas (vocês|vcs|a loja|o salão|a barbearia|a clínica) (abrem|fecham|funciona)/,
     /estão? abert|estão? fechad|abre (hoje|amanhã|amanha)|fecha (hoje|amanhã|amanha)/,
     /quando abrem|quando fecham|até que hora|a partir de que hora/,
     /funciona (hoje|amanhã|amanha|sábado|sabado|domingo)/,
+    /horário (do|da) (salão|barbearia|clínica|loja|estabelecimento)/,
   ];
   return patterns.some(p => p.test(lower));
 }
 
 function isAddressQuestion(lower: string): boolean {
   const patterns = [
-    /endereço|endereco|localização|localizacao|local|onde (fica|é|está|esta)|como chegar/,
+    /endereço|endereco|localização|localizacao|onde (fica|é|está|esta)|como chegar/,
     /rua|avenida|av\.|bairro|cep|ponto de referência|referência/,
     /fica (onde|aonde|em que)|que (rua|avenida|bairro)/,
     /mapa|google maps|waze|gps/,
@@ -187,13 +282,40 @@ function isAddressQuestion(lower: string): boolean {
   return patterns.some(p => p.test(lower));
 }
 
+/**
+ * Check if the message is asking about available services.
+ * IMPORTANT: This must NOT match:
+ * - "fazer a barba" (booking a service, not asking about services)
+ * - "quero marcar um corte" (booking intent)
+ * - "é possivel?" (availability question, not service list)
+ */
 function isServicesQuestion(lower: string): boolean {
+  // Exclude messages that are clearly about BOOKING a service, not asking about services
+  // "fazer a barba", "fazer o corte", "marcar corte" are booking intents
+  const bookingIntents = [
+    /quero (marcar|agendar|fazer)/,
+    /gostaria de (marcar|agendar|fazer)/,
+    /pode (marcar|agendar)/,
+    /vim (fazer|cortar)/,
+    /vou (fazer|cortar)/,
+    /é poss[ií]vel/,
+    /tem (como|disponibilidade)/,
+    /dá pra (marcar|agendar|fazer)/,
+    /fazer (a |o )?(barba|corte|manicure|pedicure|sobrancelha|hidrata|color|mecha)/,
+    /cortar (o |a )?(cabelo|barba)/,
+  ];
+  if (bookingIntents.some(p => p.test(lower))) {
+    return false;
+  }
+  
   const patterns = [
-    /serviço|serviços|servico|servicos|fazem|faz|oferecem|oferece|trabalham/,
-    /quais (serviço|serviços|servico|servicos)|que (serviço|serviços|servico|servicos)/,
+    /quais (serviço|serviços|servico|servicos)/,
+    /que (serviço|serviços|servico|servicos)/,
     /lista de (serviço|serviços|servico|servicos)|catálogo|catalogo/,
-    /o que (vocês|voce|vcs) (faz|fazem|oferece|oferecem)/,
-    /o que (tem|temos)|tem (disponível|disponivel)/,
+    /o que (vocês|voce|vcs) (fazem|oferecem|têm|tem)/,
+    /serviços dispon[ií]vel/,
+    /tabela de servi[çc]o/,
+    /(vocês|vcs) (fazem|oferecem|trabalham com) (quais|que)/,
   ];
   return patterns.some(p => p.test(lower));
 }

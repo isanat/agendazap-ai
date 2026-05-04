@@ -29,13 +29,14 @@ export interface PreRouterResult {
  */
 export async function preRouteMessage(
   message: string,
-  accountId: string
+  accountId: string,
+  phone?: string
 ): Promise<PreRouterResult> {
   const trimmed = message.trim();
   const lower = trimmed.toLowerCase();
   
-  // 1. Check FAQ (price, hours, address, services)
-  const faqResult = await tryFaqResponse(trimmed, accountId);
+  // 1. Check FAQ (price, hours, address, services) — pass phone for conversation context
+  const faqResult = await tryFaqResponse(trimmed, accountId, phone);
   if (faqResult.answered && faqResult.response) {
     console.log(`[Pre-Router] ✅ FAQ matched: ${faqResult.category}`);
     return {
