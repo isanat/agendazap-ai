@@ -272,6 +272,11 @@ export function SettingsPage() {
   const [isSaving, setIsSaving] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
   const [services, setServices] = useState<Array<{ id: string; name: string; price: number; durationMinutes: number }>>([])
+  const [activeTab, setActiveTab] = useState('general')
+
+  // Tabs that have their own save buttons and should hide the header save button
+  const tabsWithOwnSave = ['business', 'holidays', 'packages', 'loyalty', 'integrations']
+  const showHeaderSave = !tabsWithOwnSave.includes(activeTab)
 
   const loadSettings = async () => {
     try {
@@ -388,30 +393,35 @@ export function SettingsPage() {
           </div>
         </div>
         
-        <motion.div
-          whileHover={{ scale: 1.02 }}
-          whileTap={{ scale: 0.98 }}
-        >
-          <Button 
-            className="bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 shadow-lg shadow-green-500/25"
-            onClick={handleSave}
-            disabled={isSaving}
+        {showHeaderSave && (
+          <motion.div
+            whileHover={{ scale: 1.02 }}
+            whileTap={{ scale: 0.98 }}
+            initial={{ opacity: 0, x: 20 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: 20 }}
           >
-            {isSaving ? (
-              <motion.div
-                animate={{ rotate: 360 }}
-                transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
-                className="w-4 h-4 mr-2 border-2 border-white border-t-transparent rounded-full"
-              />
-            ) : (
-              <Save className="w-4 h-4 mr-2" />
-            )}
-            {isSaving ? 'Salvando...' : 'Salvar Alterações'}
-          </Button>
-        </motion.div>
+            <Button 
+              className="bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 shadow-lg shadow-green-500/25"
+              onClick={handleSave}
+              disabled={isSaving}
+            >
+              {isSaving ? (
+                <motion.div
+                  animate={{ rotate: 360 }}
+                  transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+                  className="w-4 h-4 mr-2 border-2 border-white border-t-transparent rounded-full"
+                />
+              ) : (
+                <Save className="w-4 h-4 mr-2" />
+              )}
+              {isSaving ? 'Salvando...' : 'Salvar Alterações'}
+            </Button>
+          </motion.div>
+        )}
       </motion.div>
 
-      <Tabs defaultValue="general" className="space-y-4">
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
         <div className="overflow-x-auto scrollbar-hide -mx-4 px-4 sm:mx-0 sm:px-0">
           <TabsList className="inline-flex sm:grid sm:grid-cols-9 w-full sm:w-auto min-w-max sm:min-w-0 h-auto gap-1 p-1 bg-muted/50">
             <TabsTrigger value="general" className="text-xs sm:text-sm whitespace-nowrap data-[state=active]:bg-gradient-to-r data-[state=active]:from-green-500 data-[state=active]:to-emerald-600 data-[state=active]:text-white">Geral</TabsTrigger>

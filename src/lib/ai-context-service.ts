@@ -737,10 +737,10 @@ export async function getSalonContext(accountId: string): Promise<SalonContext> 
     city: account.addressCity,
     state: account.addressState,
     googleMapsUrl: account.googleMapsUrl,
-    instagram: (account as any).instagram || null,
-    facebook: (account as any).facebook || null,
-    website: (account as any).website || null,
-    description: (account as any).description || null,
+    instagram: account.instagram || null,
+    facebook: account.facebook || null,
+    website: account.website || null,
+    description: account.description || null,
     openingTime: account.openingTime || '09:00',
     closingTime: account.closingTime || '18:00',
     workingDays: parseWorkingDays(account.workingDays),
@@ -748,9 +748,9 @@ export async function getSalonContext(accountId: string): Promise<SalonContext> 
     services: services as any[],
     professionals,
     packages,
-    businessCategory: (account as any).businessCategory || 'beauty',
-    aiTone: (account as any).aiTone || 'friendly',
-    aiConfig: (account as any).aiConfig || null,
+    businessCategory: account.businessCategory || 'beauty',
+    aiTone: account.aiTone || 'friendly',
+    aiConfig: account.aiConfig || null,
   };
 }
 
@@ -1125,6 +1125,7 @@ ${salon.googleMapsUrl ? 'Maps: ' + salon.googleMapsUrl : ''}
 ${salon.instagram ? 'Instagram: @' + salon.instagram : ''}
 ${salon.facebook ? 'Facebook: ' + salon.facebook : ''}
 ${salon.website ? 'Site: ' + salon.website : ''}
+${salon.description ? 'Sobre: ' + salon.description : ''}
 ${nicheConfig.serviceLabel}: ${svc}
 ${nicheConfig.professionalLabel}: ${prof || 'não informado'}
 ${pkg ? 'Pacotes: ' + pkg : ''}
@@ -1147,9 +1148,12 @@ REGRAS IMPORTANTES:
 14. SEMPRE leia o histórico da conversa antes de responder. Não repita perguntas já respondidas.
 15. Se o cliente mudar a forma de pagamento DEPOIS de um agendamento com PIX (ex: 'vou pagar pessoalmente', 'vou pagar no dia'), confirme a mudança e inclua [AGENDAR:...:nova_forma_pagamento] para atualizar. NÃO envie PIX se o cliente disse que vai pagar de outra forma.
 16. Se o cliente mencionar PIX MAS disser que vai pagar pessoalmente/no dia (ex: 'vou de pix mas pago pessoalmente'), a forma de pagamento é 'presencial' NÃO 'pix'. Só use 'pix' se o cliente quer pagar AGORA via PIX online.
-17. Quando o cliente perguntar sobre redes sociais (Instagram, Facebook, site), informe os links disponíveis acima. Se NÃO tiver, diga que não tem no momento.
-18. APÓS confirmar um agendamento, PROATIVAMENTE compartilhe: endereço, Instagram/Facebook se tiver, e pergunte se precisa de mais alguma coisa. Seja natural e breve.
+17. Quando o cliente perguntar sobre redes sociais (Instagram, Facebook, site), informe os links disponíveis acima com entusiasmo. Se NÃO tiver, diga que não tem no momento mas ofereça o WhatsApp para contato.
+18. APÓS confirmar um agendamento, PROATIVAMENTE compartilhe: endereço completo + link do Maps, Instagram/Facebook se tiver, e pergunte se precisa de mais alguma coisa. Seja natural e breve. Ex: "Endereço: Rua X, Centro 📍 [Maps]. Nosso Instagram: @salao 📸. Mais alguma coisa?"
 19. Se o cliente perguntar 'é possivel?' sobre agendar, responda SIM e já ofereça horários disponíveis, NÃO liste serviços novamente.
+20. Para clientes NOVOS ou que NÃO conhecem o estabelecimento, PROATIVAMENTE ofereça o Instagram para conhecerem o trabalho: "Quer conhecer nosso trabalho? Visite nosso Instagram: @seusalao 📸"
+21. Se o cliente pedir o endereço, envie o endereço completo + complemento (se tiver) + link do Maps. Não envie apenas parte do endereço.
+22. Seja PROATIVO e NATURAL: não espere o cliente perguntar. Após confirmar agendamento, já compartilhe as informações que ele vai precisar (endereço, como pagar, redes sociais).
 
 FLUXO DE CONSULTA DE AGENDAMENTOS:
 - Cliente pergunta sobre seus agendamentos → Veja "Agendado:" no contexto e informe.

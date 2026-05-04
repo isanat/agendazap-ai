@@ -58,20 +58,21 @@ export function BusinessInfoSettings() {
       const response = await authFetch('/api/account/me')
       if (response.ok) {
         const data = await response.json()
-        if (data.Account) {
+        const account = data.account || data.Account
+        if (account) {
           setInfo({
-            businessName: data.Account.businessName || '',
-            businessType: data.Account.businessType || 'salon',
-            instagram: data.Account.instagram || '',
-            facebook: data.Account.facebook || '',
-            website: data.Account.website || '',
-            description: data.Account.description || '',
-            address: data.Account.address || '',
-            addressCity: data.Account.addressCity || '',
-            addressState: data.Account.addressState || '',
-            addressZipCode: data.Account.addressZipCode || '',
-            addressComplement: data.Account.addressComplement || '',
-            googleMapsUrl: data.Account.googleMapsUrl || ''
+            businessName: account.businessName || '',
+            businessType: account.businessType || 'salon',
+            instagram: account.instagram || '',
+            facebook: account.facebook || '',
+            website: account.website || '',
+            description: account.description || '',
+            address: account.address || '',
+            addressCity: account.addressCity || '',
+            addressState: account.addressState || '',
+            addressZipCode: account.addressZipCode || '',
+            addressComplement: account.addressComplement || '',
+            googleMapsUrl: account.googleMapsUrl || ''
           })
         }
       }
