@@ -36,8 +36,7 @@ import { HolidaysManager } from './holidays-manager'
 import { IntegrationsSettings } from './integrations-settings'
 import { BusinessInfoSettings } from './business-info-settings'
 import { ReminderSettings } from './reminder-settings'
-import { ServicePackages } from '../services/service-packages'
-import { LoyaltyProgram } from '../loyalty/loyalty-program'
+
 import { AppointmentRemindersConfig } from './appointment-reminders-config'
 import { cn } from '@/lib/utils'
 
@@ -271,11 +270,11 @@ export function SettingsPage() {
   const [settings, setSettings] = useState<SettingsState>(defaultSettings)
   const [isSaving, setIsSaving] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
-  const [services, setServices] = useState<Array<{ id: string; name: string; price: number; durationMinutes: number }>>([])
+
   const [activeTab, setActiveTab] = useState('general')
 
   // Tabs that have their own save buttons and should hide the header save button
-  const tabsWithOwnSave = ['business', 'holidays', 'packages', 'loyalty', 'integrations']
+  const tabsWithOwnSave = ['business', 'holidays', 'integrations']
   const showHeaderSave = !tabsWithOwnSave.includes(activeTab)
 
   const loadSettings = async () => {
@@ -304,19 +303,6 @@ export function SettingsPage() {
             noShowMessage: account.noShowMessage || defaultSettings.noShowMessage,
           })
         }
-      }
-
-      // Also load services for the packages tab
-      const servicesResponse = await authFetch('/api/services')
-      if (servicesResponse.ok) {
-        const servicesData = await servicesResponse.json()
-        const serviceList = servicesData.services || servicesData || []
-        setServices(serviceList.map((s: any) => ({
-          id: s.id,
-          name: s.name,
-          price: s.price || 0,
-          durationMinutes: s.duration || s.durationMinutes || 30,
-        })))
       }
     } catch (error) {
       console.error('Error loading settings:', error)
@@ -423,15 +409,13 @@ export function SettingsPage() {
 
       <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
         <div className="overflow-x-auto scrollbar-hide -mx-4 px-4 sm:mx-0 sm:px-0">
-          <TabsList className="inline-flex sm:grid sm:grid-cols-9 w-full sm:w-auto min-w-max sm:min-w-0 h-auto gap-1 p-1 bg-muted/50">
+          <TabsList className="inline-flex sm:grid sm:grid-cols-7 w-full sm:w-auto min-w-max sm:min-w-0 h-auto gap-1 p-1 bg-muted/50">
             <TabsTrigger value="general" className="text-xs sm:text-sm whitespace-nowrap data-[state=active]:bg-gradient-to-r data-[state=active]:from-green-500 data-[state=active]:to-emerald-600 data-[state=active]:text-white">Geral</TabsTrigger>
             <TabsTrigger value="business" className="text-xs sm:text-sm whitespace-nowrap data-[state=active]:bg-gradient-to-r data-[state=active]:from-green-500 data-[state=active]:to-emerald-600 data-[state=active]:text-white">Negócio</TabsTrigger>
             <TabsTrigger value="schedule" className="text-xs sm:text-sm whitespace-nowrap data-[state=active]:bg-gradient-to-r data-[state=active]:from-green-500 data-[state=active]:to-emerald-600 data-[state=active]:text-white">Horários</TabsTrigger>
             <TabsTrigger value="holidays" className="text-xs sm:text-sm whitespace-nowrap data-[state=active]:bg-gradient-to-r data-[state=active]:from-green-500 data-[state=active]:to-emerald-600 data-[state=active]:text-white">Feriados</TabsTrigger>
             <TabsTrigger value="messages" className="text-xs sm:text-sm whitespace-nowrap data-[state=active]:bg-gradient-to-r data-[state=active]:from-green-500 data-[state=active]:to-emerald-600 data-[state=active]:text-white">Mensagens</TabsTrigger>
             <TabsTrigger value="payments" className="text-xs sm:text-sm whitespace-nowrap data-[state=active]:bg-gradient-to-r data-[state=active]:from-green-500 data-[state=active]:to-emerald-600 data-[state=active]:text-white">Pagamentos</TabsTrigger>
-            <TabsTrigger value="packages" className="text-xs sm:text-sm whitespace-nowrap data-[state=active]:bg-gradient-to-r data-[state=active]:from-green-500 data-[state=active]:to-emerald-600 data-[state=active]:text-white">Pacotes</TabsTrigger>
-            <TabsTrigger value="loyalty" className="text-xs sm:text-sm whitespace-nowrap data-[state=active]:bg-gradient-to-r data-[state=active]:from-green-500 data-[state=active]:to-emerald-600 data-[state=active]:text-white">Fidelidade</TabsTrigger>
             <TabsTrigger value="integrations" className="text-xs sm:text-sm whitespace-nowrap data-[state=active]:bg-gradient-to-r data-[state=active]:from-green-500 data-[state=active]:to-emerald-600 data-[state=active]:text-white">Integrações</TabsTrigger>
           </TabsList>
         </div>
@@ -814,23 +798,6 @@ export function SettingsPage() {
         {/* Integrations Settings */}
         <TabsContent value="integrations">
           <IntegrationsSettings />
-        </TabsContent>
-
-        {/* Service Packages */}
-        <TabsContent value="packages">
-          {services.length > 0 ? (
-            <ServicePackages services={services} />
-          ) : (
-            <div className="text-center py-12 text-muted-foreground">
-              <p className="text-lg font-medium">Nenhum serviço cadastrado</p>
-              <p className="text-sm mt-2">Cadastre serviços na aba "Serviços" para criar pacotes.</p>
-            </div>
-          )}
-        </TabsContent>
-
-        {/* Loyalty Program */}
-        <TabsContent value="loyalty">
-          <LoyaltyProgram />
         </TabsContent>
       </Tabs>
     </div>
