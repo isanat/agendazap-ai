@@ -1,140 +1,29 @@
----
-Task ID: 2
-Agent: Main
-Task: Add timezone field to production PostgreSQL schema + fix runtime bugs for Vercel deployment
-
-Work Log:
-- Added `timezone` field to `prisma/schema.postgresql.prisma` (Account model) - was missing from production schema
-- Created migration `20260420000004_add_timezone_to_account/migration.sql` with ALTER TABLE for PostgreSQL
-- Fixed undefined `dayNames` reference in `src/lib/ai-context-service.ts` line 1057 (was causing ReferenceError at runtime)
-- Exported `sendWhatsAppMessage` from webhook route (needed by evolution-health.ts queue processing dynamic import)
-- Added `timezone` field to account PUT API route in `src/app/api/account/route.ts`
-- Verified settings page already has timezone selector with Brazilian timezone options
-- Committed and pushed both changes to GitHub (2 commits: 99625f2 and bdd0f95)
-- Attempted to verify Vercel deployment but the provided token was invalid/unauthorized
-
-Stage Summary:
-- Production PostgreSQL schema now has `timezone` field (will be created via `prisma migrate deploy` on Vercel build)
-- Fixed `dayNames` runtime bug that would crash AI prompt generation
-- Fixed `sendWhatsAppMessage` export for message queue retry functionality
-- Settings UI already supports timezone selection with Brazilian timezones
-- Vercel deployment will auto-trigger from GitHub push and create the timezone column via migration
-- All code fixes from Issues #4-#7 are verified and in place
+# Worklog
 
 ---
-Task ID: 3
-Agent: Main
-Task: Fix production login 500 error + apply missing schema migrations to Neon database
+Task ID: 1
+Agent: Main Agent
+Task: Fix AI chat quality - social media, payment detection, conversation flow
 
 Work Log:
-- Diagnosed 500 error on POST /api/auth/login: Prisma query `include: { Account: true }` was failing because `Account.timezone` column didn't exist in Neon production database
-- Discovered that recent commits (2 commits) hadn't been pushed to GitHub, so Vercel was serving stale code
-- Pushed pending commits but Vercel build was failing because `prisma migrate deploy` couldn't connect (likely missing DIRECT_URL)
-- Made vercel.json build command resilient: `(prisma migrate deploy || echo 'MIGRATE_DEPLOY_FAILED')` so build continues even if migrations fail
-- Created `src/lib/db-migrate.ts` - runtime migration utility that adds missing columns using `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` for idempotency
-- Updated `src/app/api/admin/ensure-schema/route.ts` with comprehensive migration coverage for ALL 5 pending migrations (20260420000000 through 20260420000004)
-- Fixed login route to use `select` instead of `include: { Account: true }` to avoid querying columns that may not exist
-- Added auto-migration on login failure: if schema mismatch detected, automatically runs `ensureSchemaColumns()` and retries
-- Fixed `getSalonTimezone()` to handle missing timezone column gracefully
-- Fixed `validateBooking()` to handle missing Account columns gracefully
-- Fixed `getAuthUser()` to use `select` instead of `include`
-- Successfully applied all migrations via POST to `/api/admin/ensure-schema?token=agendazap-migrate`
-- Verified all 30 required columns now exist in Neon production database
-- Verified login endpoint returns proper error ("Credenciais inválidas") instead of 500
+- Investigated all AI-related files: ai-context-service.ts, faq.service.ts, pre-router.ts, webhook route
+- Identified that Instagram/Facebook/website/description fields existed in the Account DB model but were NOT being injected into the AI system prompt
+- Added instagram, facebook, website, description fields to SalonContext interface
+- Updated getSalonContext() to read these fields from the Account record
+- Updated generateSystemPrompt() to include Instagram/Facebook/website links in the system prompt
+- Added new rules 16-19 to system prompt for: PIX vs in-person payment distinction, social media awareness, proactive sharing after booking, and "é possível?" question handling
+- Added social media FAQ handler to faq.service.ts: isSocialMediaQuestion() pattern matcher and buildSocialMediaResponse() builder
+- Updated buildAddressResponse() in faq.service.ts to include social media links
+- Completely rewrote detectPaymentPreference() to prioritize in-person/cash detection BEFORE PIX, handling "vou de pix mas pago pessoalmente" correctly
+- Verified all changes compile without lint errors
 
 Stage Summary:
-- Production login 500 error is FIXED - login now works correctly
-- Neon production database now has ALL required columns including Account.timezone
-- Schema migration was applied via runtime API endpoint (ensure-schema)
-- All API routes that query Account table are now resilient to missing columns
-- Build is resilient to migration failures (won't block Vercel deployment)
-- Commits: 32d95cd, d1fc2c0 pushed to main
-
----
-Task ID: 4
-Agent: Main
-Task: Fix RESULT_CODE_KILLED - Chrome killing page due to infinite loop/memory exhaustion
-
-Work Log:
-- Diagnosed the error: RESULT_CODE_KILLED means Chrome killed the tab due to excessive memory/CPU
-- Found ROOT CAUSE: Infinite auth redirect loop in auth-fetch.ts
-  - When session expires, authFetch gets 401, refresh fails, clears partial localStorage
-  - But does NOT clear 'agendazap-storage' (Zustand persist key)
-  - On reload, Zustand rehydrates isAuthenticated=true → dashboard renders → API calls → 401 → loop
-  - Each loop renders 20+ animated components and fires 15+ API calls → Chrome kills tab
-- Fixed auth-fetch.ts: now clears 'agendazap-storage' AND calls useAppStore._resetAll() before redirect
-- Found SECOND BUG: useFetch double-fetch due to isInitialLoad in fetchData dependency array
-  - isInitialLoad=true → fetchData V1 → setIsInitialLoad(false) → fetchData V2 → effect re-fires
-  - Fixed by changing isInitialLoad from useState to useRef
-- Found THIRD BUG: Zustand store over-subscription in page.tsx
-  - `useAppStore()` without selector subscribes to ALL state changes
-  - Changed to individual selectors: `useAppStore((s) => s.sidebarOpen)` etc.
-  - Removed duplicate isAuthenticated hook at bottom
-  - Computed isSuperAdmin/isClient from already-selected user value
-- Found FOURTH BUG: DashboardContent not memoized - re-renders on every parent state change
-  - Wrapped in React.memo
-- Added safety guard: auth loop counter in sessionStorage
-  - If >3 auth checks in same session, force clear all auth data to prevent infinite loops
-
-Stage Summary:
-- RESULT_CODE_KILLED is FIXED - no more infinite auth redirect loops
-- useFetch no longer double-fetches on mount
-- Zustand subscriptions are optimized to prevent unnecessary re-renders
-- DashboardContent is memoized
-- Auth loop safety guard added
-- Commit: 31ce006 pushed to main
-
----
-Task ID: 5
-Agent: Main
-Task: Revert repository to commit 0703a2f (user's last known working state)
-
-Work Log:
-- User requested revert to commit 0703a2f which was a Vercel deployment from ~10 hours ago
-- Located commit 0703a2f345900fbe58762ccde0ecca825185a76d on GitHub (not on current main branch due to previous force pushes)
-- Commit message: "fix: remove duplicate function definitions causing build failure"
-- Performed `git reset --hard 0703a2f345900fbe58762ccde0ecca825185a76d`
-- Force pushed to GitHub: `git push agendazap main --force`
-- Created `.env` file with Neon PostgreSQL credentials (was lost in git reset since .env is gitignored)
-- Ran `prisma db push --accept-data-loss` to sync schema with the reverted code version
-- Installed missing `socket.io-client` dependency
-- Verified local dev server starts and returns HTTP 200
-- Manually triggered Vercel deployment via API (git push didn't auto-trigger)
-- Vercel deployment completed successfully (READY state)
-
-Stage Summary:
-- Repository reverted to commit 0703a2f - the user's last known working state
-- All changes from the previous session (Z.ai SDK, Zhipu AI, webhook "fixes") have been removed
-- Vercel deployment is LIVE at agendazap-apmuma6u4-isanats-projects.vercel.app
-- Local dev server running at localhost:3000 with HTTP 200
-- Database synced with reverted schema (some columns from later commits dropped)
-
----
-Task ID: 6
-Agent: Main
-Task: Fix AI pipeline - the core blocker preventing production
-
-Work Log:
-- Diagnosed root cause: ALL 3 AI providers were failing
-  - Zhipu (open.bigmodel.cn): 403 "unsupported_country_region_territory" — blocks Brazil
-  - Z.AI/Zhipu direct: 401 "身份验证失败" — wrong URL endpoint
-  - Groq: 403 "Forbidden" — expired API key
-- Discovered Z.AI has a GLOBAL endpoint (api.z.ai) vs Chinese-only (open.bigmodel.cn)
-- Tested Z.AI API directly: glm-4-plus ✅ GLM-4.5-Air ✅ (both work from Brazil)
-- Updated ZHIPU_API_URL default from open.bigmodel.cn to api.z.ai
-- Updated model fallback chain: GLM-4.5-Air → glm-4-plus (removed deprecated models)
-- Updated Groq API key in database: GROQ_API_KEY_REDACTED
-- Updated ZAI/Zhipu API key in database: ed6a82df711947778e3f7dbe7773bdb6.nrydZc7MImQwWWgM
-- Updated ZAI/Zhipu base URL in database: https://api.z.ai/api/paas/v4
-- Made both 'zhipu' and 'zai' providers use callZhipuAI() (proper fallback chain)
-- Added database fallback for API credentials when env vars not set (Vercel compatibility)
-- Synced schema.postgresql.prisma with schema.prisma
-- Tested end-to-end: AI now responds correctly with real salon context
-- Tested booking flow: AI asks correct questions, follows conversation flow
-
-Stage Summary:
-- AI PIPELINE IS NOW WORKING — the primary blocker is FIXED
-- Provider: Zhipu/Z.AI with GLM-4.5-Air model, ~5-7s response time
-- Fallback: Groq with llama-3.3-70b-versatile
-- Works without env vars on Vercel (reads from database)
-- Commits pushed: af7568f, d7c8c6b, 4d4b998
+- AI now knows about Instagram/Facebook/website from the database
+- FAQ service handles "tem instagram?" questions with instant response
+- Address responses now include social media links
+- Payment detection correctly identifies "vou de pix mas pago pessoalmente" as in_person payment
+- System prompt now instructs AI to proactively share social media after booking confirmation
+- New rule 16: explicitly tells AI that mentioning PIX + paying in person = in_person, NOT pix
+- New rule 17: AI must share social media links when asked
+- New rule 18: AI should proactively share address + social media after booking confirmation
+- New rule 19: When asked "é possível?", answer YES and offer available times, don't list services

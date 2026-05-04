@@ -63,7 +63,15 @@ export async function tryFaqResponse(
     }
   }
   
-  // 5. Thanks/goodbye
+  // 5. Social media questions
+  if (isSocialMediaQuestion(lower)) {
+    const response = await buildSocialMediaResponse(accountId);
+    if (response) {
+      return { answered: true, response, category: 'social_media' };
+    }
+  }
+  
+  // 6. Thanks/goodbye
   if (isThanksQuestion(lower)) {
     return {
       answered: true,
@@ -116,6 +124,19 @@ function isServicesQuestion(lower: string): boolean {
     /lista de (serviço|serviços|servico|servicos)|catálogo|catalogo/,
     /o que (vocês|voce|vcs) (faz|fazem|oferece|oferecem)/,
     /o que (tem|temos)|tem (disponível|disponivel)/,
+  ];
+  return patterns.some(p => p.test(lower));
+}
+
+function isSocialMediaQuestion(lower: string): boolean {
+  const patterns = [
+    /instagram|insta|ig\s/,
+    /facebook|face|fb\s/,
+    /rede?s?social|redes sociais/,
+    /tem (instagram|face|ig|facebook)/,
+    /qual (o|a) (instagram|face|facebook|site)/,
+    /segue|seguir|perfil|profile/,
+    /@\w+/, // @username patterns
   ];
   return patterns.some(p => p.test(lower));
 }
@@ -198,6 +219,9 @@ async function buildAddressResponse(accountId: string): Promise<string | null> {
         addressCity: true,
         addressState: true,
         googleMapsUrl: true,
+        instagram: true,
+        facebook: true,
+        website: true,
       },
     });
     
@@ -209,7 +233,14 @@ async function buildAddressResponse(accountId: string): Promise<string | null> {
     const address = addressParts.join(', ');
     const mapsLink = account.googleMapsUrl ? `\n🗺️ Maps: ${account.googleMapsUrl}` : '';
     
-    return `📍 Endereço: ${address}${mapsLink}\n\nQuer agendar uma visita? 😊`;
+    // Include social media links if available
+    const socialLinks: string[] = [];
+    if (account.instagram) socialLinks.push(`📸 @${account.instagram}`);
+    if (account.facebook) socialLinks.push(`📘 ${account.facebook}`);
+    if (account.website) socialLinks.push(`🌐 ${account.website}`);
+    const socialText = socialLinks.length > 0 ? `\n${socialLinks.join(' | ')}` : '';
+    
+    return `📍 Endereço: ${address}${mapsLink}${socialText}\n\nQuer agendar uma visita? 😊`;
   } catch {
     return null;
   }
@@ -237,6 +268,37 @@ async function buildServicesResponse(accountId: string): Promise<string | null> 
       .join('\n');
     
     return `✨ ${nicheLabel} disponíveis na ${account?.businessName || 'nossa empresa'}:\n\n${serviceList}\n\nPosso te ajudar a agendar? 😊`;
+  } catch {
+    return null;
+  }
+}
+
+async function buildSocialMediaResponse(accountId: string): Promise<string | null> {
+  try {
+    const account = await db.account.findUnique({
+      where: { id: accountId },
+      select: {
+        businessName: true,
+        instagram: true,
+        facebook: true,
+        website: true,
+      },
+    });
+    
+    if (!account) return null;
+    
+    const links: string[] = [];
+    if (account.instagram) links.push(`📸 Instagram: @${account.instagram} (https://instagram.com/${account.instagram})`);
+    if (account.facebook) links.push(`📘 Facebook: ${account.facebook}`);
+    if (account.website) links.push(`🌐 Site: ${account.website}`);
+    
+    if (links.length === 0) {
+      // Don't use FAQ for this - let LLM handle the 'no social media' response
+      // so it can be more contextual
+      return null;
+    }
+    
+    return `Siga a ${account.businessName} nas redes sociais! 😊\n\n${links.join('\n')}`;
   } catch {
     return null;
   }

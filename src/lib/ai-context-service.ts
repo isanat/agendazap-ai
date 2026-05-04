@@ -26,6 +26,10 @@ export interface SalonContext {
   city: string | null;
   state: string | null;
   googleMapsUrl: string | null;
+  instagram: string | null;
+  facebook: string | null;
+  website: string | null;
+  description: string | null;
   openingTime: string;
   closingTime: string;
   workingDays: number[];
@@ -626,18 +630,39 @@ function isValidPhoneNumberLocal(phone: string): boolean {
 export function detectPaymentPreference(message: string): string | null {
   const lowerMessage = message.toLowerCase();
   
-  if (lowerMessage.includes('pix') || lowerMessage.includes('online') || lowerMessage.includes('cartão') || lowerMessage.includes('cartao') || lowerMessage.includes('débito') || lowerMessage.includes('debito') || lowerMessage.includes('crédito') || lowerMessage.includes('credito')) {
-    if (lowerMessage.includes('pix')) return 'pix';
-    if (lowerMessage.includes('cartão') || lowerMessage.includes('cartao')) return 'credit_card';
-    if (lowerMessage.includes('crédito') || lowerMessage.includes('credito')) return 'credit_card';
-    if (lowerMessage.includes('débito') || lowerMessage.includes('debito')) return 'debit_card';
-    return 'online';
-  }
-  
-  if (lowerMessage.includes('presencial') || lowerMessage.includes('dinheiro') || lowerMessage.includes('no dia') || lowerMessage.includes('na hora') || lowerMessage.includes('pessoalmente')) {
+  // IMPORTANT: Check for in-person/cash payment FIRST before PIX
+  // This handles cases like 'vou de pix mas pago pessoalmente' (I'll use PIX but pay in person)
+  // where the actual intent is to pay in person, not via online PIX
+  if (lowerMessage.includes('pessoalmente') || lowerMessage.includes('presencial') || 
+      lowerMessage.includes('no dia') || lowerMessage.includes('na hora') ||
+      lowerMessage.includes('no local') || lowerMessage.includes('na loja') ||
+      lowerMessage.includes('quando chegar') || lowerMessage.includes('lá pago')) {
     if (lowerMessage.includes('dinheiro')) return 'cash';
     return 'in_person';
   }
+  
+  // Check for explicit 'pay now' / online PIX intent
+  // Only return 'pix' if the user clearly wants to pay via PIX online right now
+  if (lowerMessage.includes('pix') || lowerMessage.includes('online')) {
+    // But if they also say they'll pay in person/cash, override to in_person
+    if (lowerMessage.includes('pessoalmente') || lowerMessage.includes('presencial') || 
+        lowerMessage.includes('no dia') || lowerMessage.includes('na hora') ||
+        lowerMessage.includes('dinheiro') || lowerMessage.includes('pago lá') ||
+        lowerMessage.includes('pago no dia') || lowerMessage.includes('pagar na hora')) {
+      if (lowerMessage.includes('dinheiro')) return 'cash';
+      return 'in_person';
+    }
+    return 'pix';
+  }
+  
+  if (lowerMessage.includes('cartão') || lowerMessage.includes('cartao') || 
+      lowerMessage.includes('crédito') || lowerMessage.includes('credito') ||
+      lowerMessage.includes('débito') || lowerMessage.includes('debito')) {
+    if (lowerMessage.includes('débito') || lowerMessage.includes('debito')) return 'debit_card';
+    return 'credit_card';
+  }
+
+  if (lowerMessage.includes('dinheiro')) return 'cash';
 
   return null;
 }
@@ -712,6 +737,10 @@ export async function getSalonContext(accountId: string): Promise<SalonContext> 
     city: account.addressCity,
     state: account.addressState,
     googleMapsUrl: account.googleMapsUrl,
+    instagram: (account as any).instagram || null,
+    facebook: (account as any).facebook || null,
+    website: (account as any).website || null,
+    description: (account as any).description || null,
     openingTime: account.openingTime || '09:00',
     closingTime: account.closingTime || '18:00',
     workingDays: parseWorkingDays(account.workingDays),
@@ -1093,6 +1122,9 @@ export async function generateSystemPrompt(
 ${nicheConfig.establishmentLabel}: ${salon.businessName} | ${address || 'sem endereço'}${salon.whatsappNumber ? ' | WhatsApp: ' + salon.whatsappNumber : ''}
 Horário: ${salon.openingTime}-${salon.closingTime} ${salon.workingDays.map(d => dayNames[d]).join(',')} | Hoje: ${dayName} ${todayStr} ${salonNow.timeStr} ${open ? 'ABERTO' : 'FECHADO'} (TZ: ${salonTz})
 ${salon.googleMapsUrl ? 'Maps: ' + salon.googleMapsUrl : ''}
+${salon.instagram ? 'Instagram: @' + salon.instagram : ''}
+${salon.facebook ? 'Facebook: ' + salon.facebook : ''}
+${salon.website ? 'Site: ' + salon.website : ''}
 ${nicheConfig.serviceLabel}: ${svc}
 ${nicheConfig.professionalLabel}: ${prof || 'não informado'}
 ${pkg ? 'Pacotes: ' + pkg : ''}
@@ -1114,6 +1146,10 @@ REGRAS IMPORTANTES:
 13. Se o cliente já disse o horário, NÃO pergunte de novo. Apenas confirme.
 14. SEMPRE leia o histórico da conversa antes de responder. Não repita perguntas já respondidas.
 15. Se o cliente mudar a forma de pagamento DEPOIS de um agendamento com PIX (ex: 'vou pagar pessoalmente', 'vou pagar no dia'), confirme a mudança e inclua [AGENDAR:...:nova_forma_pagamento] para atualizar. NÃO envie PIX se o cliente disse que vai pagar de outra forma.
+16. Se o cliente mencionar PIX MAS disser que vai pagar pessoalmente/no dia (ex: 'vou de pix mas pago pessoalmente'), a forma de pagamento é 'presencial' NÃO 'pix'. Só use 'pix' se o cliente quer pagar AGORA via PIX online.
+17. Quando o cliente perguntar sobre redes sociais (Instagram, Facebook, site), informe os links disponíveis acima. Se NÃO tiver, diga que não tem no momento.
+18. APÓS confirmar um agendamento, PROATIVAMENTE compartilhe: endereço, Instagram/Facebook se tiver, e pergunte se precisa de mais alguma coisa. Seja natural e breve.
+19. Se o cliente perguntar 'é possivel?' sobre agendar, responda SIM e já ofereça horários disponíveis, NÃO liste serviços novamente.
 
 FLUXO DE CONSULTA DE AGENDAMENTOS:
 - Cliente pergunta sobre seus agendamentos → Veja "Agendado:" no contexto e informe.
