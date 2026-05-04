@@ -10,6 +10,10 @@
  * or "quanto devo pagar?" in the context of an ongoing booking conversation
  * must go to the LLM for contextual answers.
  * 
+ * CRITICAL: If the client has upcoming appointments, questions about "horário"
+ * or "valor" are almost certainly about THEIR appointment, not about general
+ * business info. In this case, ALWAYS let the LLM handle these questions.
+ * 
  * Handles:
  * - Pricing questions ("quanto custa?", "preço?") — ONLY general, not about my appointments
  * - Hours questions ("que horas abre?", "horário de funcionamento?") — ONLY business hours
@@ -39,10 +43,31 @@ export async function tryFaqResponse(
 ): Promise<FaqResponse> {
   const lower = message.trim().toLowerCase();
   
+  // ===== APPOINTMENT CHANGE/RESCHEDULE DETECTION =====
+  // If the client is asking to change, reschedule, or modify their appointment,
+  // ALWAYS let the LLM handle it. These require context and the [REAGENDAR] command.
+  if (isAppointmentChangeRequest(lower)) {
+    console.log(`[FAQ] Appointment change request detected, skipping FAQ`);
+    return { answered: false, response: null, category: 'none' };
+  }
+  
   // ===== CONVERSATION CONTEXT CHECK =====
-  // If there's an active conversation (recent messages about appointments/scheduling),
-  // the FAQ should NOT intercept follow-up questions. Let the LLM handle them with context.
+  // Two-level check:
+  // 1. If client has upcoming appointments, don't intercept hours/pricing questions
+  // 2. If there's an active conversation about appointments, skip FAQ entirely
   if (phone) {
+    // Level 1: Check for upcoming appointments (fast, efficient query)
+    const hasAppointments = await clientHasUpcomingAppointments(accountId, phone);
+    if (hasAppointments) {
+      // If client has upcoming appointments, hours/pricing questions are about THEIR
+      // appointment, not about general business info. Let the LLM handle with context.
+      if (isHoursQuestion(lower) || isPricingQuestion(lower)) {
+        console.log(`[FAQ] Client has upcoming appointments, skipping hours/pricing FAQ for: ${lower}`);
+        return { answered: false, response: null, category: 'none' };
+      }
+    }
+    
+    // Level 2: Check for active conversation about appointments
     const hasActiveConversation = await checkActiveConversation(accountId, phone);
     if (hasActiveConversation) {
       console.log(`[FAQ] Active conversation detected for ${phone}, skipping FAQ`);
@@ -102,11 +127,99 @@ export async function tryFaqResponse(
   return { answered: false, response: null, category: 'none' };
 }
 
+// ===== APPOINTMENT CHANGE DETECTION =====
+
+/**
+ * Check if the message is a request to change/reschedule/cancel an appointment.
+ * These ALWAYS need the LLM because they require:
+ * - Looking up the specific appointment ID
+ * - Using the [REAGENDAR:id:...] or [CANCELAR:id] command
+ * - Conversation context about which appointment
+ */
+function isAppointmentChangeRequest(lower: string): boolean {
+  const patterns = [
+    /alterar.*hor[áa]rio|hor[áa]rio.*alterar/,
+    /mudar.*hor[áa]rio|hor[áa]rio.*mudar/,
+    /trocar.*hor[áa]rio|hor[áa]rio.*trocar/,
+    /reagendar|remarcar/,
+    /cancelar.*agendamento|agendamento.*cancelar/,
+    /quero (cancelar|mudar|alterar|trocar)/,
+    /posso (cancelar|mudar|alterar|trocar)/,
+    /é poss[ií]vel.*alterar|é poss[ií]vel.*mudar|é poss[ií]vel.*cancelar/,
+    /é poss[ií]vel.*reagendar/,
+    /não vou conseguir|nao vou conseguir/,
+    /não pode mais|nao pode mais/,
+    /preciso (cancelar|mudar|alterar|trocar)/,
+    /queria (cancelar|mudar|alterar|trocar)/,
+    /gostaria de (cancelar|mudar|alterar|trocar)/,
+    /posso (mudar|alterar|trocar) (o |a )?(hor[áa]rio|data|dia)/,
+    /quero (mudar|alterar|trocar) (o |a )?(hor[áa]rio|data|dia)/,
+    /desmarcar/,
+  ];
+  return patterns.some(p => p.test(lower));
+}
+
+// ===== CLIENT APPOINTMENT CHECK =====
+
+/**
+ * Check if a client has upcoming appointments.
+ * If they do, questions about "horário" or "valor" are almost certainly
+ * about THEIR appointment, not about general business info.
+ * This is a fast, targeted query that only checks the appointment count.
+ */
+async function clientHasUpcomingAppointments(accountId: string, phone: string): Promise<boolean> {
+  try {
+    // Normalize phone for search - try multiple formats
+    const normalizedPhone = phone.replace(/\D/g, '');
+    const searchTerms = [
+      normalizedPhone,
+      normalizedPhone.slice(-9), // Last 9 digits (most common)
+      normalizedPhone.slice(-8), // Last 8 digits
+    ].filter(t => t.length >= 8);
+    
+    // Also handle LID format
+    if (phone.startsWith('lid:')) {
+      searchTerms.push(phone);
+    }
+    
+    // Find client by phone
+    const client = await db.client.findFirst({
+      where: {
+        accountId,
+        OR: searchTerms.map(term => ({
+          phone: { contains: term }
+        })),
+      },
+      select: { id: true },
+    });
+    
+    if (!client) return false;
+    
+    // Check for upcoming appointments
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    
+    const upcomingCount = await db.appointment.count({
+      where: {
+        clientId: client.id,
+        datetime: { gte: todayStart },
+        status: { in: ['scheduled', 'confirmed', 'pending'] },
+      },
+    });
+    
+    return upcomingCount > 0;
+  } catch (error) {
+    // If we can't check, be conservative and don't block FAQ
+    console.warn('[FAQ] Error checking upcoming appointments:', error);
+    return false;
+  }
+}
+
 // ===== CONVERSATION CONTEXT =====
 
 /**
  * Check if there's an active conversation about appointments/scheduling.
- * If the client has sent/received messages in the last 10 minutes that are
+ * If the client has sent/received messages in the last 15 minutes that are
  * about scheduling, appointments, or booking, we should NOT intercept with FAQ.
  * 
  * This prevents the FAQ from answering "qual horário?" with business hours
@@ -114,14 +227,27 @@ export async function tryFaqResponse(
  */
 async function checkActiveConversation(accountId: string, phone: string): Promise<boolean> {
   try {
-    // Check for recent messages (last 10 minutes) in this conversation
-    const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000);
+    // Check for recent messages (last 15 minutes) in this conversation
+    const fifteenMinutesAgo = new Date(Date.now() - 15 * 60 * 1000);
+    
+    // Use multiple search formats to handle phone number format mismatches
+    const normalizedPhone = phone.replace(/\D/g, '');
+    const searchTerms = [
+      normalizedPhone,
+      normalizedPhone.slice(-9), // Last 9 digits (most common)
+      normalizedPhone.slice(-8), // Last 8 digits
+    ].filter(t => t.length >= 8);
+    
+    // Also handle LID format
+    if (phone.startsWith('lid:')) {
+      searchTerms.push(phone);
+    }
     
     const recentMessages = await db.whatsappMessage.findMany({
       where: {
         accountId,
-        clientPhone: { contains: phone.slice(-9) },
-        createdAt: { gte: tenMinutesAgo },
+        OR: searchTerms.map(t => ({ clientPhone: { contains: t } })),
+        createdAt: { gte: fifteenMinutesAgo },
       },
       select: {
         direction: true,
@@ -129,7 +255,7 @@ async function checkActiveConversation(accountId: string, phone: string): Promis
         createdAt: true,
       },
       orderBy: { createdAt: 'desc' },
-      take: 6, // Check last 6 messages
+      take: 8, // Check last 8 messages
     });
     
     if (recentMessages.length < 2) {
@@ -138,14 +264,13 @@ async function checkActiveConversation(accountId: string, phone: string): Promis
     
     // Check if recent messages contain appointment/scheduling keywords
     const appointmentKeywords = [
-      'agendamento', 'agendar', 'agendado', 'marcar', 'horário',
+      'agendamento', 'agendar', 'agendado', 'marcar', 'horário', 'horario',
       'corte', 'barba', 'manicure', 'pedicure', 'sobrancelha',
-      'profissional', 'roberto', 'confirmado', 'confirmar',
-      'cancelar', 'reagendar', 'atendimento',
-      // Booking confirmation patterns from AI responses
-      'com roberto', 'com ana', 'com carlos', 'com maria',
-      'às 1', 'às 2', 'às 3', 'às 4', 'às 5', 'às 6', 'às 7', 'às 8', 'às 9',
-      'às 10', 'às 11', 'às 12', 'às 13', 'às 14', 'às 15', 'às 16', 'às 17', 'às 18', 'às 19', 'às 20',
+      'profissional', 'confirmado', 'confirmar',
+      'cancelar', 'reagendar', 'atendimento', 'atendido', 'atender',
+      'alterar', 'mudar', 'trocar', 'desmarcar',
+      'total', 'r$',
+      // Common professional names that indicate appointment context
     ];
     
     const hasAppointmentContext = recentMessages.some(msg => {
@@ -321,13 +446,23 @@ function isServicesQuestion(lower: string): boolean {
 }
 
 function isSocialMediaQuestion(lower: string): boolean {
+  // IMPORTANT: Only match when the client is CLEARLY asking about social media.
+  // Do NOT match when the message is about appointments, scheduling, or other topics
+  // that just happen to contain similar words.
+  
+  // First, exclude messages that are clearly about appointments/changes
+  if (/alterar|mudar|trocar|reagendar|cancelar|desmarcar|agendado|agendamento|hor[áa]rio/.test(lower)) {
+    return false;
+  }
+  
   const patterns = [
-    /instagram|insta|ig\s/,
-    /facebook|face|fb\s/,
+    /instagram|insta\s|ig\s/,
+    /facebook|fb\s/,
     /rede?s?social|redes sociais/,
     /tem (instagram|face|ig|facebook)/,
     /qual (o|a) (instagram|face|facebook|site)/,
-    /segue|seguir|perfil|profile/,
+    /qual (o|a) (seu|sua|seus|suas)? ?(instagram|face|facebook|site)/,
+    /segue|seguir|perfil.*instagram|perfil.*facebook/,
     /@\w+/, // @username patterns
   ];
   return patterns.some(p => p.test(lower));
