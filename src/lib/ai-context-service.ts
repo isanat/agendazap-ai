@@ -91,6 +91,7 @@ export interface ClientContext {
   upcomingAppointments: {
     id: string;
     serviceName: string;
+    servicePrice: number;
     professionalName: string | null;
     date: Date;
     status: string;
@@ -873,6 +874,7 @@ export async function getClientContext(
   const upcoming = upcomingAppointments.map((apt: any) => ({
     id: apt.id,
     serviceName: apt.Service?.name || 'Serviço',
+    servicePrice: apt.Service?.price || 0,
     professionalName: apt.Professional?.name || null,
     date: apt.datetime,
     status: apt.status
@@ -1085,9 +1087,12 @@ export async function generateSystemPrompt(
     if (lastSvc) parts.push(`Histórico: ${lastSvc}`);
     
     const upc = client.upcomingAppointments.slice(0, 5)
-      .map(a => `${a.serviceName} ${formatDate(a.date)} ${formatTime(a.date)}(id:${a.id.slice(0,8)})`)
+      .map(a => `${a.serviceName} R$${a.servicePrice.toFixed(0)} ${formatDate(a.date)} ${formatTime(a.date)}(id:${a.id.slice(0,8)})`)
       .join(', ');
     if (upc) parts.push(`Agendado: ${upc}`);
+    // Calculate total of upcoming appointments
+    const upcomingTotal = client.upcomingAppointments.reduce((sum, a) => sum + a.servicePrice, 0);
+    if (upcomingTotal > 0) parts.push(`Total agendado: R$${upcomingTotal.toFixed(0)}`);
     
     if (client.preferredServices.length > 0) parts.push(`Prefere: ${client.preferredServices.join(',')}`);
     if (client.preferredProfessional) parts.push(`${nicheConfig.professionalLabel} pref: ${client.preferredProfessional}`);
@@ -1139,7 +1144,7 @@ REGRAS IMPORTANTES:
 5. Se o cliente quer agendar para outra pessoa, pergunte o NOME e TELEFONE dessa pessoa.
 6. Cliente novo→pergunte nome. Sem CPF e quer PIX→pergunte CPF ANTES de agendar.
 7. QUANDO O CLIENTE PERGUNTAR SOBRE SEUS AGENDAMENTOS, CONSULTE o campo "Agendado:" acima e RESPONDA com os agendamentos existentes. Se não houver, ofereça ajudar.
-8. NUNCA responda com lista de ${nicheConfig.serviceLabel.toLowerCase()} quando o cliente pergunta sobre SEUS agendamentos existentes.
+8. NUNCA responda com lista de ${nicheConfig.serviceLabel.toLowerCase()} quando o cliente pergunta sobre SEUS agendamentos existentes. Se o cliente perguntar o VALOR/QUANTIA dos SEUS agendamentos, SOME os preços listados no campo "Agendado:" acima e informe o total. Ex: 'Seus agendamentos: Corte R$45 + Barba R$35 = R$80 total.'
 9. Se o cliente quiser CANCELAR um agendamento, confirme qual e inclua [CANCELAR:id].
 10. Se o cliente quiser REAGENDAR, confirme novo horário e inclua [REAGENDAR:id:YYYY-MM-DD:HH:mm].
 11. NUNCA cumprimente novamente se já está em andamento uma conversa. Se o cliente já disse o que quer, vá direto ao ponto.
@@ -1148,7 +1153,7 @@ REGRAS IMPORTANTES:
 14. SEMPRE leia o histórico da conversa antes de responder. Não repita perguntas já respondidas.
 15. Se o cliente mudar a forma de pagamento DEPOIS de um agendamento com PIX (ex: 'vou pagar pessoalmente', 'vou pagar no dia'), confirme a mudança e inclua [AGENDAR:...:nova_forma_pagamento] para atualizar. NÃO envie PIX se o cliente disse que vai pagar de outra forma.
 16. Se o cliente mencionar PIX MAS disser que vai pagar pessoalmente/no dia (ex: 'vou de pix mas pago pessoalmente'), a forma de pagamento é 'presencial' NÃO 'pix'. Só use 'pix' se o cliente quer pagar AGORA via PIX online.
-17. Quando o cliente perguntar sobre redes sociais (Instagram, Facebook, site), informe os links disponíveis acima com entusiasmo. Se NÃO tiver, diga que não tem no momento mas ofereça o WhatsApp para contato.
+17. REDES SOCIAIS: Se o prompt acima mostra Instagram/Facebook/Site, NUNCA diga que não tem. SEMPRE compartilhe com entusiasmo. Ex: 'Siga nosso Instagram: @salao 📸'. Só diga que não tem se REALMENTE não houver nenhuma informação acima. VERIFIQUE o campo Instagram/Facebook/Site acima ANTES de responder.
 18. APÓS confirmar um agendamento, PROATIVAMENTE compartilhe: endereço completo + link do Maps, Instagram/Facebook se tiver, e pergunte se precisa de mais alguma coisa. Seja natural e breve. Ex: "Endereço: Rua X, Centro 📍 [Maps]. Nosso Instagram: @salao 📸. Mais alguma coisa?"
 19. Se o cliente perguntar 'é possivel?' sobre agendar, responda SIM e já ofereça horários disponíveis, NÃO liste serviços novamente.
 20. Para clientes NOVOS ou que NÃO conhecem o estabelecimento, PROATIVAMENTE ofereça o Instagram para conhecerem o trabalho: "Quer conhecer nosso trabalho? Visite nosso Instagram: @seusalao 📸"
