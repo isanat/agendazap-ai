@@ -149,24 +149,24 @@ function checkConfirmation(lower: string): PreRouterResult {
 function getNicheGreeting(niche: string, tone: string, businessName: string): string {
   const greetings: Record<string, Record<string, string>> = {
     barber: {
-      casual: `E aí! 🙌 Bem-vindo à ${businessName}! Sou o assistente virtual. Quer marcar um cortê? É só me dizer! ✂️`,
-      friendly: `E aí mano! 👊 ${businessName} na área! Quer agendar um horário? Tô aqui pra ajudar! ✂️`,
-      professional: `Olá! Bem-vindo à ${businessName}. Como posso ajudá-lo hoje? Temos horários disponíveis para agendamento.`,
+      casual: `E aí! 🙌 Bem-vindo(a) à ${businessName}! Sou o assistente virtual. Quer marcar um horário? É só me dizer! ✂️`,
+      friendly: `E aí! 👊 ${businessName} na área! Quer agendar um horário? Tô aqui pra ajudar! ✂️`,
+      professional: `Olá! Bem-vindo(a) à ${businessName}. Como posso ajudar hoje? Temos horários disponíveis para agendamento.`,
     },
     beauty: {
-      casual: `Oi amor! 💕 Bem-vinda ao ${businessName}! Quer agendar um horário? Tô aqui pra te ajudar! ✨`,
-      friendly: `Oi linda! 😊 Que bom te ver! No ${businessName} a gente cuida de você! Quer agendar? 💅`,
-      professional: `Olá! Bem-vinda ao ${businessName}. Como posso ajudá-la hoje? Estamos prontas para agendar seu horário.`,
+      casual: `Olá! 💕 Bem-vindo(a) ao ${businessName}! Quer agendar um horário? Tô aqui pra ajudar! ✨`,
+      friendly: `Olá! 😊 Que bom te ver por aqui! No ${businessName} cuidamos de você! Quer agendar? 💅`,
+      professional: `Olá! Bem-vindo(a) ao ${businessName}. Como posso ajudar hoje? Estamos prontos para agendar seu horário.`,
     },
     aesthetics: {
-      casual: `Olá! 🌸 Bem-vinda ao ${businessName}! Quer conhecer nossos tratamentos? Posso te ajudar a agendar! ✨`,
-      friendly: `Oi! 😊 Fico feliz em te ajudar! No ${businessName} temos vários tratamentos. Quer agendar? 💆`,
-      professional: `Olá! Bem-vinda ao ${businessName}. Somos especializados em estética e bem-estar. Como posso ajudá-la?`,
+      casual: `Olá! 🌸 Bem-vindo(a) ao ${businessName}! Quer conhecer nossos tratamentos? Posso ajudar a agendar! ✨`,
+      friendly: `Oi! 😊 Fico feliz em ajudar! No ${businessName} temos vários tratamentos. Quer agendar? 💆`,
+      professional: `Olá! Bem-vindo(a) ao ${businessName}. Somos especializados em estética e bem-estar. Como posso ajudar?`,
     },
     dental: {
-      casual: `Olá! 😊 Bem-vindo ao ${businessName}! Posso te ajudar a agendar uma consulta? 🦷`,
+      casual: `Olá! 😊 Bem-vindo(a) ao ${businessName}! Posso ajudar a agendar uma consulta? 🦷`,
       friendly: `Oi! 😊 No ${businessName} cuidamos do seu sorriso! Quer agendar uma consulta? Estamos aqui pra ajudar! 🦷`,
-      professional: `Olá! Bem-vindo ao ${businessName}. Como posso ajudá-lo? Gostaria de agendar uma consulta?`,
+      professional: `Olá! Bem-vindo(a) ao ${businessName}. Como posso ajudar? Gostaria de agendar uma consulta?`,
     },
   };
   
