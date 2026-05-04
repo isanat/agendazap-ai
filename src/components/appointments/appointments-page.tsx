@@ -546,9 +546,26 @@ export function AppointmentsPage() {
           body: JSON.stringify(updateBody)
         })
 
-        if (!response.ok) throw new Error('Failed to update appointment')
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}))
+          const errorMessage = errorData.error || 'Erro ao atualizar agendamento'
+          throw new Error(errorMessage)
+        }
         
-        toast.success('Agendamento atualizado com sucesso!')
+        // Read response to detect reassignment and other changes
+        const responseData = await response.json()
+        
+        if (responseData.reassigned) {
+          toast.success(`Agendamento transferido de ${responseData.reassignedFrom} para ${responseData.reassignedTo}`, {
+            duration: 5000,
+          })
+        } else if (responseData.serviceChanged) {
+          toast.success('Serviço do agendamento alterado com sucesso!')
+        } else if (responseData.datetimeChanged) {
+          toast.success('Horário do agendamento alterado com sucesso!')
+        } else {
+          toast.success('Agendamento atualizado com sucesso!')
+        }
       } else {
         // Create new appointment
         const response = await authFetch('/api/appointments', {
@@ -574,7 +591,7 @@ export function AppointmentsPage() {
       setIsDialogOpen(false)
       fetchData()
     } catch (err) {
-      toast.error('Erro ao salvar agendamento')
+      toast.error(err instanceof Error ? err.message : 'Erro ao salvar agendamento')
       console.error(err)
     } finally {
       setIsSaving(false)
@@ -589,12 +606,15 @@ export function AppointmentsPage() {
         body: JSON.stringify({ id, status })
       })
 
-      if (!response.ok) throw new Error('Failed to update status')
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(errorData.error || 'Erro ao atualizar status')
+      }
       
       toast.success(`Status alterado para "${statusLabels[status]}"`)
       fetchData()
     } catch (err) {
-      toast.error('Erro ao atualizar status')
+      toast.error(err instanceof Error ? err.message : 'Erro ao atualizar status')
       console.error(err)
     }
   }
@@ -647,11 +667,19 @@ export function AppointmentsPage() {
               datetime: newDatetime.toISOString()
             })
           }).then(async (response) => {
-            if (!response.ok) throw new Error('Failed to update')
+            if (!response.ok) {
+              const errorData = await response.json().catch(() => ({}))
+              throw new Error(errorData.error || 'Erro ao mover agendamento')
+            }
+            const responseData = await response.json()
             fetchData()
-            toast.success(`Agendamento de ${apt.clientName} movido para ${newTime}`)
-          }).catch(() => {
-            toast.error('Erro ao mover agendamento')
+            if (responseData.reassigned) {
+              toast.success(`Agendamento transferido de ${responseData.reassignedFrom} para ${responseData.reassignedTo}`, { duration: 5000 })
+            } else {
+              toast.success(`Agendamento de ${apt.clientName} movido para ${newTime}`)
+            }
+          }).catch((err) => {
+            toast.error(err instanceof Error ? err.message : 'Erro ao mover agendamento')
           })
         }
       }

@@ -110,6 +110,9 @@ model Appointment {
   pixExpiresAt       DateTime?
   pixPaid            Boolean      @default(false)
   pixPaidAt          DateTime?
+  previousProfessionalId String?
+  reassignedAt          DateTime?
+  reassignedBy          String?
   createdAt          DateTime     @default(now())
   updatedAt          DateTime     @updatedAt
   Account            Account      @relation(fields: [accountId], references: [id], onDelete: Cascade)
