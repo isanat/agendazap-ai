@@ -165,6 +165,27 @@ export async function findOrCreateClient(
       }
     });
   }
+  
+  // If not found and this is a LID/JID with pushName, try to find an existing client
+  // by matching the pushName against client names in the same account that have a real phone.
+  // This prevents creating duplicate clients (one with real phone, one with LID) for the same person.
+  if (!existingClient && isNonPhone && pushName) {
+    const trimmedPushName = pushName.trim();
+    if (trimmedPushName.length >= 2) {
+      const nameMatchedClient = await db.client.findFirst({
+        where: {
+          accountId,
+          name: { equals: trimmedPushName, mode: 'insensitive' },
+          phone: { not: { startsWith: 'lid:' } },
+        }
+      });
+      
+      if (nameMatchedClient) {
+        existingClient = nameMatchedClient;
+        console.log(`[AI Context] LID client matched by pushName "${trimmedPushName}" to existing client: ${nameMatchedClient.id} (phone: ${nameMatchedClient.phone})`);
+      }
+    }
+  }
 
   if (existingClient) {
     const updateData: Record<string, any> = {};

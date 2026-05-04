@@ -659,6 +659,129 @@ export async function resolveLidToPhone(
       console.log('[LID-Resolution] DB LidMapping lookup failed:', dbErr);
     }
 
+    // Method 8: Search Client table for clients with the same whatsappLid that have a real phone
+    // This handles the case where a client was previously created with both a LID and a real phone
+    try {
+      const lidAccountId = await findAccountByInstance(instanceName);
+      if (lidAccountId) {
+        // First, find a client that has this whatsappLid and a real phone number
+        const clientWithRealPhone = await db.client.findFirst({
+          where: {
+            accountId: lidAccountId,
+            whatsappLid: lidValue,
+            phone: { not: { startsWith: 'lid:' } },
+          },
+          select: { phone: true, name: true }
+        });
+        
+        if (clientWithRealPhone && isValidPhoneNumber(clientWithRealPhone.phone.replace(/\D/g, ''))) {
+          const realPhone = clientWithRealPhone.phone.replace(/\D/g, '');
+          console.log(`[LID-Resolution] LID resolved via Client whatsappLid lookup to: ${realPhone} (client: ${clientWithRealPhone.name})`);
+          setCachedLidPhone(lidIdentifier, realPhone);
+          await saveLidMapping(lidValue, lidJid, instanceName, realPhone, 'client-whatsappLid-lookup');
+          return realPhone;
+        }
+        
+        // Second, if we found a client with this LID but only a lid: phone, search for
+        // another client with the same name that has a real phone number
+        const lidClient = await db.client.findFirst({
+          where: {
+            accountId: lidAccountId,
+            whatsappLid: lidValue,
+          },
+          select: { name: true, id: true, phone: true }
+        });
+        
+        if (lidClient?.name) {
+          const nameMatchedClient = await db.client.findFirst({
+            where: {
+              accountId: lidAccountId,
+              name: { equals: lidClient.name, mode: 'insensitive' },
+              phone: { not: { startsWith: 'lid:' } },
+              id: { not: lidClient.id },
+            },
+            select: { phone: true, name: true, id: true }
+          });
+          
+          if (nameMatchedClient && isValidPhoneNumber(nameMatchedClient.phone.replace(/\D/g, ''))) {
+            const realPhone = nameMatchedClient.phone.replace(/\D/g, '');
+            console.log(`[LID-Resolution] LID resolved via Client name match to: ${realPhone} (matched "${lidClient.name}" to client "${nameMatchedClient.name}")`);
+            setCachedLidPhone(lidIdentifier, realPhone);
+            await saveLidMapping(lidValue, lidJid, instanceName, realPhone, 'client-name-match');
+            return realPhone;
+          }
+        }
+      }
+    } catch (clientDbErr) {
+      console.log('[LID-Resolution] Client DB lookup failed:', clientDbErr);
+    }
+
+    // Method 9: Try whatsappNumbers endpoint with account's known phone numbers
+    // This is specific to Evolution API v1.8.6 where the whatsappNumbers endpoint works
+    // for real phone numbers but not for LIDs. We batch-check known phones to verify them.
+    try {
+      const lidAccountId = await findAccountByInstance(instanceName);
+      if (lidAccountId) {
+        const knownClients = await db.client.findMany({
+          where: {
+            accountId: lidAccountId,
+            phone: { not: { startsWith: 'lid:' } },
+          },
+          select: { phone: true, name: true },
+          take: 20,
+        });
+        
+        // Try to find a client whose name matches the name returned by whatsappNumbers for the LID
+        // When whatsappNumbers is called with a LID, it returns exists:false but may include the name
+        if (knownClients.length > 0) {
+          // First, call whatsappNumbers with the LID to get the name
+          try {
+            const response = await fetch(
+              `${systemConfig.apiUrl}/chat/whatsappNumbers/${instanceName}`,
+              {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'apikey': systemConfig.apiKey,
+                },
+                body: JSON.stringify({ numbers: [lidValue] }),
+              }
+            );
+            
+            if (response.ok) {
+              const data = await response.json();
+              const contacts = Array.isArray(data) ? data : [data];
+              
+              for (const contact of contacts) {
+                // Even if exists is false, the name field may be present
+                const contactName = contact?.name || '';
+                if (contactName && contactName.length >= 2) {
+                  // Match against known clients by name
+                  const matchedClient = knownClients.find(c => 
+                    c.name.toLowerCase().trim() === contactName.toLowerCase().trim()
+                  );
+                  
+                  if (matchedClient) {
+                    const phoneDigits = matchedClient.phone.replace(/\D/g, '');
+                    if (isValidPhoneNumber(phoneDigits)) {
+                      console.log(`[LID-Resolution] LID resolved via whatsappNumbers name match to: ${phoneDigits} (name: "${contactName}")`);
+                      setCachedLidPhone(lidIdentifier, phoneDigits);
+                      await saveLidMapping(lidValue, lidJid, instanceName, phoneDigits, 'whatsappNumbers-name-match');
+                      return phoneDigits;
+                    }
+                  }
+                }
+              }
+            }
+          } catch (whatsappNumErr) {
+            console.log('[LID-Resolution] whatsappNumbers endpoint failed:', whatsappNumErr);
+          }
+        }
+      }
+    } catch (batchErr) {
+      console.log('[LID-Resolution] whatsappNumbers batch check failed:', batchErr);
+    }
+
     console.log(`[LID-Resolution] Could not resolve LID ${lidJid} to a valid phone number`);
     // Save failed resolution attempt to LidMapping table for future retry
     await saveLidMapping(lidValue, lidJid, instanceName);

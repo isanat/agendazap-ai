@@ -980,6 +980,75 @@ async function processIncomingMessage(
         }
       }
       
+      // Method 3: Name-based LID resolution
+      // If pushName is available, search for existing clients with the same name AND accountId
+      // that have a real phone number (not starting with "lid:"). This handles the common case
+      // where a client already exists with their real phone number.
+      if (isLidIdentifier(phone) && data.pushName && lidAccountId) {
+        const pushName = String(data.pushName).trim();
+        if (pushName.length >= 2) {
+          try {
+            const matchingClient = await db.client.findFirst({
+              where: {
+                accountId: lidAccountId,
+                name: { equals: pushName, mode: 'insensitive' },
+                phone: { not: { startsWith: 'lid:' } },
+              },
+              select: { phone: true, name: true, id: true }
+            });
+            
+            if (matchingClient && isValidPhoneNumber(matchingClient.phone.replace(/\D/g, ''))) {
+              phone = matchingClient.phone.replace(/\D/g, '');
+              setCachedLidPhone(`lid:${lidValue}`, phone);
+              console.log(`[Webhook] LID resolved via pushName match to: ${phone} (client: ${matchingClient.name}, id: ${matchingClient.id})`);
+              
+              // Also update the LID client record with the real phone
+              try {
+                await db.client.updateMany({
+                  where: { whatsappLid: lidValue, accountId: lidAccountId },
+                  data: { phone: matchingClient.phone }
+                });
+              } catch (e) {
+                console.warn(`[Webhook] Could not update LID client phone: ${e}`);
+              }
+            }
+          } catch (nameLookupErr) {
+            console.warn(`[Webhook] Name-based LID resolution failed: ${nameLookupErr}`);
+          }
+        }
+      }
+      
+      // Method 4: Try resolving via known clients list
+      // Get all real phone numbers from the account's clients and match by name
+      if (isLidIdentifier(phone) && lidAccountId && data.pushName) {
+        try {
+          const knownClients = await db.client.findMany({
+            where: {
+              accountId: lidAccountId,
+              phone: { not: { startsWith: 'lid:' } },
+            },
+            select: { phone: true, name: true },
+            take: 50,
+          });
+          
+          if (knownClients.length > 0) {
+            const pushNameLower = String(data.pushName).trim().toLowerCase();
+            // Find client by name match
+            const matchedClient = knownClients.find(c => c.name.toLowerCase() === pushNameLower);
+            if (matchedClient) {
+              const phoneDigits = matchedClient.phone.replace(/\D/g, '');
+              if (isValidPhoneNumber(phoneDigits)) {
+                phone = phoneDigits;
+                setCachedLidPhone(`lid:${lidValue}`, phone);
+                console.log(`[Webhook] LID resolved via client name lookup: ${phone}`);
+              }
+            }
+          }
+        } catch (clientLookupErr) {
+          console.warn(`[Webhook] Client name lookup LID resolution failed: ${clientLookupErr}`);
+        }
+      }
+      
       if (isLidIdentifier(phone)) {
         console.warn(`[Webhook] ⚠️ Could not resolve LID ${lidValue} to a real phone. Will use JID-based sending via originalJid: ${originalJid}`);
       }
@@ -2061,6 +2130,43 @@ async function processMessageWithAI(
         }
       }
       
+      // If still unresolved, try name-based resolution using the client record
+      if (isNonPhoneIdentifier(phoneForSending)) {
+        try {
+          const identifierValue = isLidIdentifier(phone) ? phone.replace('lid:', '') : phone.replace('jid:', '');
+          // Find the client created for this LID to get its name
+          const lidClient = await db.client.findFirst({
+            where: {
+              accountId,
+              whatsappLid: identifierValue,
+            },
+            select: { name: true, id: true }
+          });
+          
+          if (lidClient?.name) {
+            // Search for a client with the same name but a real phone
+            const realPhoneClient = await db.client.findFirst({
+              where: {
+                accountId,
+                name: { equals: lidClient.name, mode: 'insensitive' },
+                phone: { not: { startsWith: 'lid:' } },
+                id: { not: lidClient.id },
+              },
+              select: { phone: true, name: true, id: true }
+            });
+            
+            if (realPhoneClient && isValidPhoneNumber(realPhoneClient.phone.replace(/\D/g, ''))) {
+              phoneForSending = realPhoneClient.phone.replace(/\D/g, '');
+              phoneForContext = phoneForSending;
+              if (isLidIdentifier(phone)) setCachedLidPhone(phone, phoneForSending);
+              console.log(`[Webhook] Identifier resolved via client name match: ${phone} → ${phoneForSending} (name: "${lidClient.name}", matched client id: ${realPhoneClient.id})`);
+            }
+          }
+        } catch (nameErr) {
+          console.log(`[Webhook] Name-based identifier lookup failed:`, nameErr);
+        }
+      }
+      
       if (isNonPhoneIdentifier(phoneForSending)) {
         console.warn(`[Webhook] ⚠️ Cannot fully resolve ${phone} - will attempt JID-based sending via originalJid: ${originalJid}`);
       }
@@ -2355,6 +2461,60 @@ async function processMessageWithAI(
             }
           } catch (preSendErr) {
             console.warn(`[Webhook] Pre-send LID resolution failed: ${preSendErr}`);
+          }
+          
+          // Pre-send name-based resolution: If still unresolved, look up the client record
+          // by name and find a matching client with a real phone number
+          if (isLidIdentifier(phoneForSending)) {
+            try {
+              const lidValueForNameLookup = phoneForSending.replace('lid:', '');
+              // First, find the client that was created for this LID to get its name
+              const lidClient = await db.client.findFirst({
+                where: {
+                  accountId,
+                  whatsappLid: lidValueForNameLookup,
+                },
+                select: { name: true, id: true }
+              });
+              
+              if (lidClient?.name) {
+                // Search for a different client with the same name but a real phone
+                const realPhoneClient = await db.client.findFirst({
+                  where: {
+                    accountId,
+                    name: { equals: lidClient.name, mode: 'insensitive' },
+                    phone: { not: { startsWith: 'lid:' } },
+                    id: { not: lidClient.id }, // Don't match the same LID client
+                  },
+                  select: { phone: true, name: true, id: true }
+                });
+                
+                if (realPhoneClient && isValidPhoneNumber(realPhoneClient.phone.replace(/\D/g, ''))) {
+                  phoneForSending = realPhoneClient.phone.replace(/\D/g, '');
+                  setCachedLidPhone(`lid:${lidValueForNameLookup}`, phoneForSending);
+                  console.log(`[Webhook] ✅ Pre-send LID resolved via client name match: ${lidClient.name} → ${phoneForSending} (matched client id: ${realPhoneClient.id})`);
+                  
+                  // Update the LID client record with the real phone
+                  try {
+                    await db.client.updateMany({
+                      where: { whatsappLid: lidValueForNameLookup, accountId },
+                      data: { phone: realPhoneClient.phone }
+                    });
+                  } catch (e) {
+                    console.warn(`[Webhook] Could not update LID client phone in pre-send: ${e}`);
+                  }
+                  
+                  // Migrate client records
+                  try {
+                    await migrateClientLidToPhone(clientId, lidValueForNameLookup, phoneForSending);
+                  } catch (migrateErr) {
+                    console.warn(`[Webhook] Could not migrate client in pre-send name resolution: ${migrateErr}`);
+                  }
+                }
+              }
+            } catch (namePreSendErr) {
+              console.warn(`[Webhook] Pre-send name-based LID resolution failed: ${namePreSendErr}`);
+            }
           }
         }
 
