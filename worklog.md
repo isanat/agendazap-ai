@@ -102,3 +102,28 @@ Stage Summary:
 - Root cause: FAQ pre-router intercepting appointment-specific questions as general FAQ
 - Fixed 3 files: faq.service.ts, ai-context-service.ts, evolution/route.ts
 - Deploy: Pushed to GitHub, Vercel auto-deploy triggered (token expired, couldn't verify)
+
+---
+Task ID: 2
+Agent: Main
+Task: Fix all FAQ false positives + add conversation context awareness
+
+Work Log:
+- Identified 5 distinct problems in the WhatsApp conversation
+- Root cause: FAQ has NO conversation context - each message evaluated in isolation
+- "fazer a barba" matched "faz" in isServicesQuestion → listed all 8 services
+- "qual horario?" matched isHoursQuestion → returned business hours (09:00-19:00)
+- Follow-up questions in active conversations intercepted by FAQ before LLM sees them
+- Rewrote faq.service.ts with conversation context checking via checkActiveConversation()
+- Fixed isServicesQuestion to exclude booking intents ("fazer a barba", "é possivel", "quero marcar")
+- Fixed isHoursQuestion to be more restrictive - requires clear business hours context
+- Added phone parameter to tryFaqResponse() and preRouteMessage() for context
+- Updated evolution/route.ts to pass phone to preRouteMessage()
+- Committed (ea87a40) and pushed to GitHub
+
+Stage Summary:
+- FAQ now checks last 10 minutes of conversation for appointment context
+- If active scheduling conversation detected, FAQ is completely skipped
+- isServicesQuestion no longer matches booking intents
+- isHoursQuestion requires explicit business hours context, not just "horário"
+- All short/ambiguous questions now fall through to LLM for contextual answers
