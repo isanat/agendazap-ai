@@ -85,7 +85,52 @@ export async function tryFaqResponse(
 
 // ===== PATTERN MATCHING =====
 
+/**
+ * Check if the message is a question about MY appointment value/total.
+ * These should NOT be handled by FAQ — they need the LLM to calculate the sum
+ * of the client's specific appointments.
+ * 
+ * Examples that should fall through to LLM:
+ * - "quanto devo pagar?" (how much should I pay?)
+ * - "qual o valor do meu agendamento?" (what's the value of my appointment?)
+ * - "quanto vou pagar?" (how much will I pay?)
+ * - "sabe quanto devo?" (do you know how much I owe?)
+ * - "qual o valor que devo pagar?" (what value should I pay?)
+ * - "quanto fica meu agendamento" (how much is my appointment)
+ */
+function isMyAppointmentValueQuestion(lower: string): boolean {
+  const patterns = [
+    /quanto (devo|vou) pagar/,
+    /quanto (eu |)(devo|vou)/,
+    /valor (do |da )?meu (agendamento|atendimento|serviço|horário)/,
+    /valor que (eu |)devo/,
+    /valor que devo pagar/,
+    /quanto (fica |é )(o |a )?meu (agendamento|atendimento|serviço|horário)/,
+    /preço (do |de )?meu (agendamento|atendimento|serviço|horário)/,
+    /sabe quanto (devo|vou pagar)/,
+    /quanto (custa|fica|é) (o |a )?meu/,
+    /total (do |de )?meu (agendamento|atendimento)/,
+    /quanto (é |fica )?pra (eu |)pagar/,
+    /já (estou |to )agendado.*valor|valor.*já (estou |to )agendado/,
+    /quero saber (o |o )?valor (que |)devo/,
+    /meu (agendamento|atendimento|serviço).*quanto|quanto.*meu (agendamento|atendimento|serviço)/,
+    /(estou|to) agendado.*quanto|quanto.*(estou|to) agendado/,
+    /quero saber (o |o )?valor/,
+    /quanto (é |fica |custa )?o (meu |)(agendamento|atendimento)/,
+    /valor (do |da )?(meu |)(agendamento|atendimento|horário)/,
+    /(devo|vou) pagar quanto/,
+    /quanto (vou |devo )pagar/,
+  ];
+  return patterns.some(p => p.test(lower));
+}
+
 function isPricingQuestion(lower: string): boolean {
+  // IMPORTANT: If the client is asking about THEIR appointment value,
+  // do NOT handle via FAQ. Let the LLM calculate the sum of their specific appointments.
+  if (isMyAppointmentValueQuestion(lower)) {
+    return false;
+  }
+  
   const patterns = [
     /preço|precos|preç(o|os)|quanto|valor|valores|custo|custa|tarifa|tabela/,
     /quanto (custa|fica|é|ta|tá)|quanto (é|custa|fica) (o|a|um|uma)/,
@@ -96,7 +141,32 @@ function isPricingQuestion(lower: string): boolean {
   return patterns.some(p => p.test(lower));
 }
 
+/**
+ * Check if the message is asking about THEIR appointment time.
+ * These should NOT be handled by FAQ — they need the LLM to look up the client's specific appointments.
+ */
+function isMyAppointmentTimeQuestion(lower: string): boolean {
+  const patterns = [
+    /meu (agendamento|atendimento|horário|hora)/,
+    /horário (do |do )?meu (agendamento|atendimento)/,
+    /que (horário|hora) (é |e |está )?meu/,
+    /(agendamento|atendimento) .*horário|horário.*(agendamento|atendimento)/,
+    /tenho agendamento.*horário|horário.*tenho agendamento/,
+    /verificar.*agendamento|verifique.*agendamento/,
+    /ver se.*agendado|verificar.*agendado/,
+    /qual (horário|hora) (meu|estou)/,
+    /(estou|to) agendado.*(horário|hora)|(horário|hora).*(estou|to) agendado/,
+  ];
+  return patterns.some(p => p.test(lower));
+}
+
 function isHoursQuestion(lower: string): boolean {
+  // IMPORTANT: If the client is asking about THEIR appointment time,
+  // do NOT handle via FAQ. Let the LLM look up their specific appointment.
+  if (isMyAppointmentTimeQuestion(lower)) {
+    return false;
+  }
+  
   const patterns = [
     /horário|horario|hora|horas|funcionamento|aberto|fechado|abrem|fecham/,
     /que horas|a que hora|qual (o|a) horário|horário de (funcionamento|atendimento)/,

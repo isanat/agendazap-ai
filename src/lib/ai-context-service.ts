@@ -1144,7 +1144,7 @@ REGRAS IMPORTANTES:
 5. Se o cliente quer agendar para outra pessoa, pergunte o NOME e TELEFONE dessa pessoa.
 6. Cliente novo→pergunte nome. Sem CPF e quer PIX→pergunte CPF ANTES de agendar.
 7. QUANDO O CLIENTE PERGUNTAR SOBRE SEUS AGENDAMENTOS, CONSULTE o campo "Agendado:" acima e RESPONDA com os agendamentos existentes. Se não houver, ofereça ajudar.
-8. NUNCA responda com lista de ${nicheConfig.serviceLabel.toLowerCase()} quando o cliente pergunta sobre SEUS agendamentos existentes. Se o cliente perguntar o VALOR/QUANTIA dos SEUS agendamentos, SOME os preços listados no campo "Agendado:" acima e informe o total. Ex: 'Seus agendamentos: Corte R$45 + Barba R$35 = R$80 total.'
+8. CRÍTICO - VALOR DO AGENDAMENTO: Se o cliente perguntar "quanto devo pagar", "qual o valor", "quanto vou pagar", "quanto fica" sobre SEUS agendamentos, NUNCA liste todos os serviços. SOME os preços do campo "Agendado:" acima e informe APENAS o total. Ex: 'Seus agendamentos: Corte R$45 + Barba R$35 = R$80 total.' Se o cliente já está agendado e pergunta sobre valor, é sobre SEUS agendamentos, NÃO sobre a lista geral.
 9. Se o cliente quiser CANCELAR um agendamento, confirme qual e inclua [CANCELAR:id].
 10. Se o cliente quiser REAGENDAR, confirme novo horário e inclua [REAGENDAR:id:YYYY-MM-DD:HH:mm].
 11. NUNCA cumprimente novamente se já está em andamento uma conversa. Se o cliente já disse o que quer, vá direto ao ponto.
@@ -1162,6 +1162,7 @@ REGRAS IMPORTANTES:
 
 FLUXO DE CONSULTA DE AGENDAMENTOS:
 - Cliente pergunta sobre seus agendamentos → Veja "Agendado:" no contexto e informe.
+- Cliente pergunta quanto deve pagar / valor do agendamento → SOME os preços em "Agendado:" + "Total agendado:" e informe o valor total. NUNCA liste a tabela de preços geral.
 - Se tem agendamento HOJE, destaque: "Você tem agendamento HOJE!"
 - Se NÃO tem, ofereça ajudar a agendar.
 

@@ -2753,6 +2753,12 @@ async function getFallbackResponse(accountId: string, message: string): Promise<
   }
 
   if (/preço|valor|quanto|custa/i.test(lowerMessage)) {
+    // Check if this is about the client's own appointment value (not general pricing)
+    const isMyAppointmentValue = /meu|devo|agendado|agendamento|vou pagar|devo pagar/i.test(lowerMessage);
+    if (isMyAppointmentValue) {
+      // Don't list all services - tell them to try again when AI is available
+      return `No momento não consigo verificar seus agendamentos. Por favor, tente novamente em instantes ou entre em contato diretamente pelo WhatsApp do estabelecimento. 😊`;
+    }
     if (services.length > 0) {
       return `Olá! Aqui estão nossos preços:\n\n${servicesList}\n\nPosso te ajudar a agendar algum desses serviços? 😊`;
     }
